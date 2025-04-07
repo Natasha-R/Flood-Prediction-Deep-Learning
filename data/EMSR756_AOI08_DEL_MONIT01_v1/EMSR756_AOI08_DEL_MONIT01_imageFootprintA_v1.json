@@ -1,0 +1,9 @@
+{
+"type": "FeatureCollection",
+"name": "EMSR756_AOI08_DEL_MONIT01_imageFootprintA_v1",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "obj_type": "Image Footprint", "or_src_id": 1 }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 14.999630961000037, 52.350483652000037 ], [ 16.611420429000077, 52.339511064000078 ], [ 16.589319243000034, 51.719573851000064 ], [ 15.947009617000049, 50.45992271800003 ], [ 14.999714237000035, 50.463774070000056 ], [ 14.999630961000037, 52.350483652000037 ] ] ] } },
+{ "type": "Feature", "properties": { "obj_type": "Image Footprint", "or_src_id": 3 }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 14.999706371000059, 52.350473157000067 ], [ 16.61138436300007, 52.339484852000055 ], [ 16.576518664000048, 51.352633893000075 ], [ 14.999712727000031, 51.363241707000043 ], [ 14.999706371000059, 52.350473157000067 ] ] ] } }
+]
+}
