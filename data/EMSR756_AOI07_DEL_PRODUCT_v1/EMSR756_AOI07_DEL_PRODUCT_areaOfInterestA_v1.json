@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "EMSR756_AOI07_DEL_PRODUCT_areaOfInterestA_v1",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "emsr_id": "EMSR756", "glide_no": "FL-2024-000169-AUT", "area_id": "07", "locality": "Scinawa", "map_type": "Delineation" }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 16.47653, 51.403780555000026 ], [ 16.50075430000004, 51.38404440000005 ], [ 16.498309787000039, 51.367636451000067 ], [ 16.491124513000045, 51.349128928000027 ], [ 16.47653, 51.332586697000067 ], [ 16.47653, 51.308401 ], [ 16.396507, 51.308401 ], [ 16.396507, 51.48773 ], [ 16.47653, 51.48773 ], [ 16.47653, 51.403780555000026 ] ] ] } }
+]
+}
