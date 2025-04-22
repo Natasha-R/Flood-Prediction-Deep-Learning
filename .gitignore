@@ -1,3 +1,7 @@
+# Custom
+check_gpu.py
+temp_code/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
