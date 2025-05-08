@@ -46,6 +46,13 @@ def main(geojson_folder):
         geometry_event_date_id += 1
     extent["geometry_event_date_id"] = extent["geometry_event_date_id"].astype(int)
 
+    # create a unique id for each aoi, based on the geometry
+    geometry_id = 0
+    for group_name, group_values in extent.groupby(["geometry"]):
+        extent.loc[group_values.index, "geometry_id"] = int(geometry_id)
+        geometry_id += 1
+    extent["geometry_id"] = extent["geometry_id"].astype(int)
+
     extent = extent.sort_values(["event", "subevent"])
     extent.to_file(f"metadata/aoi_extent.geojson")
 
