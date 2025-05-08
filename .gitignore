@@ -1,6 +1,7 @@
 # Custom
 check_gpu.py
 temp_code/
+nohup.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
