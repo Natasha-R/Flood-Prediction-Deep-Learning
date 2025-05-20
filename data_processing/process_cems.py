@@ -6,13 +6,12 @@ gdal.UseExceptions()
 from tqdm import tqdm
 import argparse
 import pandas as pd
-
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def find_paths(event_folder, file):
-    """Returns the paths in the event_folder for the given files. For example, folder=EMSR756, file=aoi.
-    """
+    # Returns the paths in the event_folder for the given files. 
+    # For example, folder=EMSR756, file=aoi.
     search_patterns = {"aoi": [("areaOfInterestA", ".json"), ("area_of_interest", ".shp")],
                        "observed": [("observedEventA", ".json"), ("observed_event_a", ".shp"), ("crisis_information_poly", ".shp")],
                        "database": [("source", ".dbf")]}
@@ -26,10 +25,9 @@ def find_paths(event_folder, file):
     raise Exception(f"No paths were found for {event_folder} {file}")
 
 def find_subevent(match_file, paths):
-    """Finds the path to the subevent contained in paths which matches the same subevent in match_file
-       For example, if match_file is a path to an AOI, and paths is a list of dbf files,
-       the dbf path to the subevent matching the subevent in the AOI path is returned.
-    """
+    # Find the path to the subevent contained in paths which matches the same subevent in match_file
+    # For example, if match_file is a path to an AOI, and paths is a list of dbf files,
+    # the dbf path to the subevent matching the subevent in the AOI path is returned.
     subevent = "_".join(match_file.split("/")[-1].split("_")[:4])
     matching_paths = [path for path in paths if subevent in path]
     if len(matching_paths) != 1:
@@ -38,9 +36,8 @@ def find_subevent(match_file, paths):
         return matching_paths[0]
     
 def create_raster_values(notation):
-    """To be used with .apply on a dataframe. 
-    Matches flooded area, trace, AOI and other to the associated value to be burned into the raster.
-    """
+
+    # match flooded area, trace, AOI and other to the associated raster burn value
     if notation == None:
         return 3
     elif notation.lower() == "flood trace" or notation.lower() == "flood traces":
@@ -53,8 +50,8 @@ def create_raster_values(notation):
         return 0
     
 def find_utm(lat_coord, lon_coord):
-    """Given a latitude and longitude coordinate, find the corresponding UTM zone and return the coordinate system.
-    """
+
+    # Given a latitude and longitude coord, find the corresponding UTM coordinate system
     zone = min(int((lon_coord + 180) / 6) + 1, 60)
     if lat_coord >= 0:
         epsg = 32600 + zone  # WGS84 Northern Hemisphere
@@ -62,12 +59,15 @@ def find_utm(lat_coord, lon_coord):
         epsg = 32700 + zone  # WGS84 Southern Hemisphere
     return epsg
 
-def create_geojsons_by_date(cems_path, geojsons_folder):
-    """
-    Given a particular event, create geojsons containing the polygons for the AOI and observed events.
-    A separate geojson file is created for each recording time.
-    The files contain the geometry, attribute (flood trace, area, aoi, other), raster value, and date.
-    """
+def create_cems_geojson(data_folder):
+
+    cems_path = f"{data_folder}/raw_cems"
+    if not os.path.isdir(cems_path):
+        raise Exception("No raw_cems folder!")
+    geojson_folder = f"{data_folder}/geojson_cems"
+    if not os.path.isdir(geojson_folder):
+        os.mkdir(geojson_folder)
+        
     all_events = [event_code for event_code in os.listdir(cems_path) if "EMSR" in event_code]
 
     for event_code in tqdm(all_events):
@@ -144,15 +144,16 @@ def create_geojsons_by_date(cems_path, geojsons_folder):
             # save the subevent to a geojson file
             proj_values = proj_values.sort_values("raster_value", ascending=True)
             proj_values_path = f"{event_path.split('/')[-1]}_{date}"
-            proj_values.to_file(f"{geojsons_folder}/{proj_values_path}.geojson", driver="GeoJSON")
+            proj_values.to_file(f"{geojson_folder}/{proj_values_path}.geojson", driver="GeoJSON")
 
-def create_rasters_from_geojson(geojson_folder, raster_folder):
-    """
-    Convert the geojsons in the given folder into raster format.
-    The rasters are all projected to EPSG:4326 (WGS84).
-    """
+def create_cems_raster(data_folder):
 
+    raster_folder = f"{data_folder}/raster_cems"
+    if not os.path.isdir(raster_folder):
+        os.mkdir(raster_folder)
+    
     # find all geojson files in geojson_folder
+    geojson_folder = f"{data_folder}/geojson_cems/"
     all_geojson = [os.path.join(root, file) for root, dirs, files in os.walk(geojson_folder) for file in files if file.endswith(".geojson")]
 
     for geojson_path in tqdm(all_geojson):
@@ -161,27 +162,24 @@ def create_rasters_from_geojson(geojson_folder, raster_folder):
         geojson = gpd.read_file(geojson_path)
 
         # rasterize the geojson, then project to EPSG:4326
-        gdal.Rasterize(f"{raster_folder}/{subevent}_utm.tif", geojson_path, format="GTiff", xRes=10, yRes=10, attribute="raster_value")
-        gdal.Warp(f"{raster_folder}/{subevent}.tif", f"{raster_folder}/{subevent}_utm.tif", srcSRS=geojson.crs, dstSRS="EPSG:4326", format="GTiff", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"])
+        gdal.Rasterize(f"{raster_folder}/{subevent}_utm.tif", geojson_path, 
+                       format="GTiff", xRes=10, yRes=10, attribute="raster_value")
+        gdal.Warp(f"{raster_folder}/{subevent}.tif", f"{raster_folder}/{subevent}_utm.tif", 
+                  srcSRS=geojson.crs, dstSRS="EPSG:4326", format="GTiff", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"])
         os.remove(f"{raster_folder}/{subevent}_utm.tif")
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate GeoJSON and raster files to represent the CEMS labels.")
 
-    parser.add_argument('--cems_path', required=True, help="The path to the folder containing the original CEMS labels.")
-    parser.add_argument("--geojson_folder", required=True, help="The path to the GeoJSON folder.")
-    parser.add_argument("--raster_folder", default=None, help="The path to the raster folder.")
-
+    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
     parser.add_argument("--create_geojson", action="store_true", default=False, help="Create the GeoJSON files.")
     parser.add_argument("--create_raster", action="store_true", default=False, help="Create the rasters from the GeoJSON files.")
 
     args = parser.parse_args()
 
-    if args.create_geojson:
-        create_geojsons_by_date(args.cems_path, args.geojson_folder)
+    if args.create_cems_geojson:
+        create_cems_geojson(args.data_folder)
 
-    if args.create_raster:
-        if not args.raster_folder:
-            raise Exception("Please specify a folder to save the rasters to.")
-        create_rasters_from_geojson(args.geojson_folder, args.raster_folder)
+    if args.create_cems_raster:
+        create_cems_raster(args.data_folder)

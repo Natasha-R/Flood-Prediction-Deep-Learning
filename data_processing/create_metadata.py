@@ -4,13 +4,16 @@ import pandas as pd
 from tqdm import tqdm
 import argparse
 from shapely.ops import unary_union
+import rasterio
+from shapely.geometry import box
 
-def main(geojson_folder):
+def find_aoi_extents(data_folder):
 
+    cems_geojson_folder = f"{data_folder}/geojson_cems"
     extent_dict = {"event": [], "subevent":[], "date":[], "geometry":[]}
 
     # find the path to each aoi, and create a dataframe containing its extent
-    aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(geojson_folder) for file in files]
+    aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(cems_geojson_folder) for file in files]
     for aoi_path in tqdm(aoi_paths):
         aoi = gpd.read_file(aoi_path).to_crs(epsg=4326)
         aoi = aoi[aoi["raster_value"]==1]
@@ -54,12 +57,43 @@ def main(geojson_folder):
     extent["geometry_id"] = extent["geometry_id"].astype(int)
 
     extent = extent.sort_values(["event", "subevent"])
-    extent.to_file(f"metadata/aoi_extent.geojson")
+    metadata_folder = f"{data_folder}/metadata"
+    if not os.path.isdir(metadata_folder):
+        os.mkdir(metadata_folder)
+    extent.to_file(f"{metadata_folder}/aoi_extent.geojson")
+
+
+def find_raster_extents(data_folder):
+    
+    cems_raster_folder = f"{data_folder}/raster_cems"
+    extent_dict = {"event": [], "subevent":[], "date":[], "geometry":[], "height":[], "width":[]}
+
+    # find the path to each raster, and create a dataframe containing its extent
+    all_paths = [os.path.join(root, file) for root, dirs, files in os.walk(cems_raster_folder) for file in files]
+    for raster_path in tqdm(all_paths):
+        extent_dict["event"].append(raster_path.split("/")[-1].split(".")[0].split("_")[0])
+        extent_dict["subevent"].append(raster_path.split("/")[-1].split(".")[0])
+        extent_dict["date"].append(raster_path.split("/")[-1].split(".")[0].split("_")[-1])
+        extent_dict["geometry"].append(box(*rasterio.open(raster_path).bounds))
+        height, width = rasterio.open(raster_path).shape
+        extent_dict["height"].append(height)
+        extent_dict["width"].append(width)
+
+    extent = gpd.GeoDataFrame(extent_dict, crs="EPSG:4326")
+    extent = extent.sort_values(["event", "subevent"], ascending=True, ignore_index=True)
+    metadata_folder = f"{data_folder}/metadata"
+    extent.to_file(f"{metadata_folder}/raster_extent.geojson")
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Create a GeoJSON file representing the extent of the AOIs")
-    parser.add_argument("--geojson_folder", required=True, help="The path to the GeoJSON folder")
+    parser = argparse.ArgumentParser(description="Create GeoJSON files representing the extent of the CEMS AOIs and rasters")
+    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--find_aoi_extents", action="store_true", default=False, help="Create metadata describing the AOI extents.")
+    parser.add_argument("--find_raster_extents", action="store_true", default=False, help="Create metadata describing the raster extents.")
     args = parser.parse_args()
 
-    main(geojson_folder=args.geojson_folder)
+    if args.find_aoi_extents:
+        find_aoi_extents(args.data_folder)
+
+    if args.find_raster_extents:
+        find_raster_extents(args.data_folder)
