@@ -3,6 +3,7 @@ from data_processing.create_metadata import find_aoi_extents, find_raster_extent
 from data_processing.modify_cems_permanent_water import create_permanent_water_geojson, create_permanent_water_raster, combine_cems_and_permanent_water
 from data_processing.create_dem import create_dem_rasters
 from data_processing.create_sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2
+from data_processing.create_soil_moisture import create_soil_moisture_rasters
 
 import argparse
 
@@ -12,6 +13,7 @@ import argparse
 # 3. Download the seas and waters polygons from https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip, and place the unzipped folder into "water-polygons-split-4326" in "data_folder".
 
 def main(data_folder, fabdem_folder):
+    
     # Process the CEMS data
     create_cems_geojson(data_folder)
     create_cems_raster(data_folder)
@@ -34,6 +36,7 @@ def main(data_folder, fabdem_folder):
     download_sentinel2(data_folder)
 
     # Create the soil moisture rasters
+    create_soil_moisture_rasters(data_folder)
 
     # Create the precipitation rasters
 

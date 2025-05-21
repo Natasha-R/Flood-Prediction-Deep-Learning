@@ -1,0 +1,112 @@
+import earthaccess
+import rasterio
+import geopandas as gpd
+from tqdm import tqdm
+import numpy as np
+from osgeo import gdal
+import os
+from rasterio.enums import Resampling
+import time
+import pandas as pd
+import argparse
+gdal.UseExceptions()
+
+def create_soil_moisture_rasters(data_folder):
+
+    earthaccess.login(strategy="environment")
+    raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+    raster_extents["one_day_previous"] = raster_extents["date"] - pd.Timedelta(days=1)
+    raster_extents["one_week_previous"] = raster_extents["date"] - pd.Timedelta(days=7)
+    soil_moisture_folder = f"{data_folder}/raster_soil_moisture"
+    if not os.path.isdir(soil_moisture_folder):
+        os.mkdir(soil_moisture_folder)
+        os.mkdir(f"{soil_moisture_folder}/one_day_previous")
+        os.mkdir(f"{soil_moisture_folder}/one_week_previous")
+
+    for index in tqdm(range(len(raster_extents))):
+
+        # extract data for both one day previous to the subevent, and one week before
+        for time_frame in ["one_day_previous", "one_week_previous"]:
+            
+            # extract out the metadata for the subevent raster
+            date = raster_extents[time_frame].dt.date[index]
+            bounds = raster_extents["geometry"][index].bounds
+            height = int(raster_extents["height"].iloc[index])
+            width = int(raster_extents["width"].iloc[index])
+            subevent = raster_extents["subevent"][index]
+            folder_path = f"{soil_moisture_folder}/{time_frame}/"
+
+            if not os.path.isfile(f"{folder_path}/{subevent}.tif"):
+
+                # download the soil moisture data from the NASA Earth Science Data API
+                response = earthaccess.search_data(
+                    short_name="SPL4SMGP",
+                    temporal=(f"{date}T12:00:00Z", f"{date}T15:00:00Z", True),
+                    version="008",
+                    downloadable=True,
+                )
+                if len(response) != 1:
+                    print(f"{len(response)} responses for subevent {subevent}")
+                    continue
+                file_path = earthaccess.download(response, folder_path)[0]
+
+                # import the label raster to match the soil moisture raster to
+                with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+                    reference_label = reference_file.read(1)
+
+                # extract the surface and rootzone soil moisture layers
+                soil_moistures = []
+                for layer in ["sm_surface", "sm_rootzone"]:
+                    
+                    # convert the hdf5 file into a GeoTIFF with the correct projection
+                    gdal.Translate(
+                        destName=f"{folder_path}/{subevent}_{layer}_temp.tif",
+                        srcDS=f'HDF5:"{file_path}"://Geophysical_Data/{layer}',
+                        format='GTiff', outputSRS='EPSG:6933',
+                        outputBounds=(-17367530.45, 7314540.83, 17367530.45, -7314540.83)
+                    )
+
+                    # extract only the raster area from the GeoTIFF and convert to WGS84
+                    gdal.Warp(f"{folder_path}/{subevent}_{layer}.tif", f"{folder_path}/{subevent}_{layer}_temp.tif", 
+                                srcSRS="EPSG:6933", dstSRS="EPSG:4326", format='GTiff',
+                                resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
+
+                    # import the soil moisture raster data and metadata
+                    with rasterio.open(f"{folder_path}/{subevent}_{layer}.tif") as soil_moisture_file:
+                        soil_moisture_raster = soil_moisture_file.read(1)
+                        meta = soil_moisture_file.meta.copy()
+
+                    # keep only soil moisture data within the AOI bounds, and scale data by 10,000 to store as uint16
+                    soil_moisture = np.where(reference_label == 0, 0, soil_moisture_raster)
+                    soil_moisture = np.where(soil_moisture == -9999, 0, soil_moisture)
+                    soil_moisture = soil_moisture*10000
+                    soil_moisture = soil_moisture.astype(int)
+                    soil_moistures.append(soil_moisture)
+
+                    # remove the intermediary files
+                    os.remove(f"{folder_path}/{subevent}_{layer}.tif")
+                    os.remove(f"{folder_path}/{subevent}_{layer}_temp.tif")
+                os.remove(file_path)
+
+                # save the two soil moisture bands to a GeoTIFF
+                meta.update({"driver": "GTiff",
+                            "dtype": "uint16",
+                            "resampling": Resampling.bilinear,
+                            "nodata": 0,
+                            "count": 2,
+                            })
+                with rasterio.open(f"{folder_path}/{subevent}.tif", "w", **meta, compress="LZW") as file:
+                    file.write(soil_moistures[0], 1)
+                    file.set_band_description(1, "soil_moisture_surface")
+                    file.write(soil_moistures[1], 2)
+                    file.set_band_description(2, "soil_moisture_rootzone")
+
+                time.sleep(10)
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description="Create raster files representing the soil moisture values.")
+    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    args = parser.parse_args()
+    
+    create_soil_moisture_rasters(args.data_folder)
