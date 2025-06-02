@@ -39,6 +39,7 @@ def create_soil_moisture_rasters(data_folder):
             if not os.path.isfile(f"{folder_path}/{subevent}.tif"):
 
                 # download the soil moisture data from the NASA Earth Science Data API
+                print("\n", "\n", f"{folder_path}/{subevent}.tif")
                 response = earthaccess.search_data(
                     short_name="SPL4SMGP",
                     temporal=(f"{date}T12:00:00Z", f"{date}T15:00:00Z", True),
@@ -47,7 +48,7 @@ def create_soil_moisture_rasters(data_folder):
                 )
                 if len(response) != 1:
                     print(f"{len(response)} responses for subevent {subevent}")
-                    continue
+                    response = [response[0]]
                 file_path = earthaccess.download(response, folder_path)[0]
 
                 # import the label raster to match the soil moisture raster to
@@ -62,7 +63,7 @@ def create_soil_moisture_rasters(data_folder):
                     gdal.Translate(
                         destName=f"{folder_path}/{subevent}_{layer}_temp.tif",
                         srcDS=f'HDF5:"{file_path}"://Geophysical_Data/{layer}',
-                        format='GTiff', outputSRS='EPSG:6933',
+                        format='GTiff', outputSRS='EPSG:6933', noData="none",
                         outputBounds=(-17367530.45, 7314540.83, 17367530.45, -7314540.83)
                     )
 
@@ -80,7 +81,7 @@ def create_soil_moisture_rasters(data_folder):
                     soil_moisture = np.where(reference_label == 0, 0, soil_moisture_raster)
                     soil_moisture = np.where(soil_moisture == -9999, 0, soil_moisture)
                     soil_moisture = soil_moisture*10000
-                    soil_moisture = soil_moisture.astype(int)
+                    soil_moisture = np.round(soil_moisture).astype(np.uint16)
                     soil_moistures.append(soil_moisture)
 
                     # remove the intermediary files
@@ -92,14 +93,14 @@ def create_soil_moisture_rasters(data_folder):
                 meta.update({"driver": "GTiff",
                             "dtype": "uint16",
                             "resampling": Resampling.bilinear,
-                            "nodata": 0,
-                            "count": 2,
-                            })
+                            "count": 2})
+                meta.pop("nodata", None)
                 with rasterio.open(f"{folder_path}/{subevent}.tif", "w", **meta, compress="LZW") as file:
                     file.write(soil_moistures[0], 1)
                     file.set_band_description(1, "soil_moisture_surface")
                     file.write(soil_moistures[1], 2)
                     file.set_band_description(2, "soil_moisture_rootzone")
+                    file.nodata = None
 
                 time.sleep(10)
 

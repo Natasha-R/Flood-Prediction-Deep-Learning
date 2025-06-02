@@ -85,6 +85,7 @@ def create_permanent_water_raster(data_folder):
              reference_label = reference_file.read(1)
              height, width = reference_label.shape
              meta = reference_file.meta.copy()
+             meta.pop("nodata", None)
 
         # rasterize the permanent water polygons and match to the cems label raster extent
         gdal.Rasterize(f"{permanent_water_raster_folder}/{subevent}_utm.tif", path, 
@@ -99,6 +100,7 @@ def create_permanent_water_raster(data_folder):
         perm_water_masked = np.where(reference_label == 0, 0, perm_water_raster)
         with rasterio.open(f"{permanent_water_raster_folder}/{subevent}.tif", "w", **meta, compress="LZW") as file:
             file.write(perm_water_masked, 1)
+            file.nodata = None
 
         # delete the temporary intermediary files
         os.remove(f"{permanent_water_raster_folder}/{subevent}_utm.tif")
@@ -115,6 +117,7 @@ def combine_cems_and_permanent_water(data_folder):
         with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as cems_file:
             cems_raster = cems_file.read(1)
             meta = cems_file.meta.copy()
+            meta.pop("nodata", None)
         with rasterio.open(f"{data_folder}/raster_permanent_water/{subevent}.tif") as perm_water_file:
             perm_water_raster = perm_water_file.read(1)
 
@@ -127,6 +130,7 @@ def combine_cems_and_permanent_water(data_folder):
             os.mkdir(label_raster)
         with rasterio.open(f"{label_raster_folder}/{subevent}.tif", "w", **meta, compress="LZW") as file:
             file.write(label_raster, 1)
+            file.nodata = None
 
 if __name__ == "__main__":
 

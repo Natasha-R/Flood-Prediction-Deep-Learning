@@ -7,10 +7,11 @@ from tqdm import tqdm
 import argparse
 from osgeo import gdal
 import shutil
+import numpy as np
 from rasterio.enums import Resampling
 gdal.UseExceptions()
 
-def create_dem_rasters(fabdem_folder, data_folder):
+def extract_dem_aoi(fabdem_folder, data_folder):
 
     # import the aoi and DEM metadata
     fabdem = gpd.read_file(f"{fabdem_folder}/FABDEM_v1-2_tiles.geojson").to_crs(epsg=4326)
@@ -20,10 +21,6 @@ def create_dem_rasters(fabdem_folder, data_folder):
     dem_aoi_folder = f"{data_folder}/raster_dem_aoi"
     if not os.path.isdir(dem_aoi_folder):
         os.mkdir(dem_aoi_folder)
-
-    dem_raster_folder = f"{data_folder}/raster_dem"
-    if not os.path.isdir(dem_raster_folder):
-        os.mkdir(dem_raster_folder)
 
     for idx in tqdm(range(len(aois))):
 
@@ -35,16 +32,16 @@ def create_dem_rasters(fabdem_folder, data_folder):
         # for each DEM tile, extract data only within the aoi polygon, and save temporarily
         for index, tile in enumerate(tiles):
             with rasterio.open(tile) as file:
-                out_image, out_transform = mask(file, [geometry], crop=True, nodata=0)
+                out_image, out_transform = mask(file, [geometry], crop=True)
                 out_meta = file.meta.copy()
                 out_meta.update({"driver": "GTiff",
                                 "height": out_image.shape[1],
                                 "width": out_image.shape[2],
-                                "transform": out_transform,
-                                "resampling": Resampling.bilinear,
-                                "nodata": 0})
+                                "transform": out_transform})
+                out_meta.pop("nodata", None)
                 with rasterio.open(f"{dem_aoi_folder}/temp_{index}.tif", "w", **out_meta) as file:
                     file.write(out_image)
+                    file.nodata = None
 
         # combine all of the masked DEM images together to create one DEM representing the aoi polygon
         temp_tiles_paths = [f"{dem_aoi_folder}/temp_{index}.tif" for index in range(len(tiles))]
@@ -56,8 +53,9 @@ def create_dem_rasters(fabdem_folder, data_folder):
                             "width": merged_image.shape[2],
                             "transform": merged_transform,
                             "dtype": "int16",
-                            "resampling": Resampling.bilinear,
-                            "nodata": 0})
+                            "resampling": Resampling.bilinear})
+        merged_image = np.where(merged_image == -9999, 0, merged_image)
+        merged_image = np.round(merged_image).astype(np.int16)
         with rasterio.open(f"{dem_aoi_folder}/dem_{aois.loc[idx, 'geometry_id']}.tif", "w", **merged_meta, compress="LZW") as file:
             file.write(merged_image)
         for file in temp_tiles:
@@ -65,12 +63,19 @@ def create_dem_rasters(fabdem_folder, data_folder):
         for path in temp_tiles_paths:
             os.remove(path)
 
+def create_dem_rasters(data_folder):
+    
     # import in the metadata on all of the AOIs and rasters
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    rasters = gpd.read_file("metadata/raster_extent.geojson")
+    rasters = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     rasters["raster_geometry"] = rasters["geometry"]
     aois = aois.merge(rasters[["subevent", "height", "width", "raster_geometry"]], how="left", on="subevent")
-    
+
+    dem_aoi_folder = f"{data_folder}/raster_dem_aoi"
+    dem_raster_folder = f"{data_folder}/raster_dem"
+    if not os.path.isdir(dem_raster_folder):
+        os.mkdir(dem_raster_folder)
+
     for subevent, data in tqdm(aois.groupby("subevent")):
 
         # determine which DEM AOIs need to be combined, and the final extent of the raster
@@ -84,15 +89,21 @@ def create_dem_rasters(fabdem_folder, data_folder):
                   srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"],
                   resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
         
-        # remove the intermediary files
-        shutil.rmtree(dem_aoi_folder)
+    # remove the intermediary files
+    shutil.rmtree(dem_aoi_folder)
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create DEM files clipped to the extent of the AOIs, and save in rasters matching to the CEMS labels.")
     parser.add_argument("--fabdem_folder", default=None, help="The path to the folder containing the full downloaded FABDEM.")
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    
+    parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
+    parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
+
     args = parser.parse_args()
 
-    create_dem_rasters(fabdem_folder=args.fabdem_folder, data_folder=args.data_folder)
+    if args.extract_dem_aoi:
+        extract_dem_aoi(fabdem_folder=args.fabdem_folder, data_folder=args.data_folder)
+
+    if args.create_dem_rasters:
+        create_dem_rasters(data_folder=args.data_folder)

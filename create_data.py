@@ -1,9 +1,10 @@
 from data_processing.process_cems import create_cems_geojson, create_cems_raster
 from data_processing.create_metadata import find_aoi_extents, find_raster_extents
-from data_processing.modify_cems_permanent_water import create_permanent_water_geojson, create_permanent_water_raster, combine_cems_and_permanent_water
-from data_processing.create_dem import create_dem_rasters
+from data_processing.create_label import create_permanent_water_geojson, create_permanent_water_raster, combine_cems_and_permanent_water
+from data_processing.create_dem import extract_dem_aoi, create_dem_rasters
 from data_processing.create_sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
 from data_processing.create_soil_moisture import create_soil_moisture_rasters
+from data_processing.create_soil_type import create_soil_type
 
 import os
 import argparse
@@ -13,7 +14,7 @@ import argparse
 # 2. Download the FABDEM data from https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn and extract all the image files.
 # 3. Download the seas and waters polygons from https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip, and place the unzipped folder into "water-polygons-split-4326" in "data_folder".
 
-def main(data_folder, fabdem_folder):
+def main(data_folder, fabdem_folder, soil_folder):
 
     # Process the CEMS data
     create_cems_geojson(data_folder)
@@ -29,7 +30,8 @@ def main(data_folder, fabdem_folder):
     combine_cems_and_permanent_water(data_folder)
 
     # Create the DEM rasters
-    create_dem_rasters(fabdem_folder, data_folder)
+    extract_dem_aoi(fabdem_folder, data_folder)
+    create_dem_rasters(data_folder)
 
     # Create the Sentinel 2 rasters
     find_sentinel2_availability(data_folder)
@@ -37,8 +39,9 @@ def main(data_folder, fabdem_folder):
     download_sentinel2(data_folder)
     create_sentinel2_rasters(data_folder)
 
-    # Create the soil moisture rasters
+    # Create the soil moisture and soil type rasters
     create_soil_moisture_rasters(data_folder)
+    create_soil_type(data_folder, soil_folder)
 
     # Create the precipitation rasters
 
@@ -46,6 +49,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create the full data stack for all CEMS data stored in 'data_folder'.")
     parser.add_argument("--fabdem_folder", required=True, help="The path to the folder containing the full downloaded FABDEM.")
+    parser.add_argument("--soil_folder", required=True, help="The path to the folder containing the full downloaded soil data.")
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
     
     args = parser.parse_args()
@@ -57,4 +61,4 @@ if __name__ == "__main__":
     if len([file for file in os.listdir(args.fabdem_folder) if file.endswith(".zip")]) > 0:
         raise ValueError("All image files must be extracted from FABDEM")
 
-    main(data_folder=args.data_folder, fabdem_folder=args.fabdem_folder)
+    main(data_folder=args.data_folder, fabdem_folder=args.fabdem_folder, soil_folder=args.soil_folder)
