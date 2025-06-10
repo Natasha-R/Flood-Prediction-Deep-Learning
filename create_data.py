@@ -3,7 +3,7 @@ from data_processing.create_metadata import find_aoi_extents, find_raster_extent
 from data_processing.create_label import create_permanent_water_geojson, create_permanent_water_raster, combine_cems_and_permanent_water
 from data_processing.create_dem import extract_dem_aoi, create_dem_rasters
 from data_processing.create_sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
-from data_processing.create_soil_moisture import create_soil_moisture_rasters
+from data_processing.create_soil_moisture import download_soil_moisture_data, create_soil_moisture_rasters
 from data_processing.create_soil_type import create_soil_type
 from data_processing.create_sentinel1 import download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters
 from data_processing.create_precipitation import download_precipitation, create_precipitation_rasters
@@ -46,6 +46,7 @@ def main(data_folder, fabdem_folder, soil_folder):
     create_sentinel1_rasters(data_folder)
 
     # Create the soil moisture and soil type rasters
+    download_soil_moisture_data(data_folder)
     create_soil_moisture_rasters(data_folder)
     create_soil_type(data_folder, soil_folder)
 
