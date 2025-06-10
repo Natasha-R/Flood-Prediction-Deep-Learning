@@ -5,7 +5,8 @@ from data_processing.create_dem import extract_dem_aoi, create_dem_rasters
 from data_processing.create_sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
 from data_processing.create_soil_moisture import create_soil_moisture_rasters
 from data_processing.create_soil_type import create_soil_type
-
+from data_processing.create_sentinel1 import download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters
+from data_processing.create_precipitation import download_precipitation, create_precipitation_rasters
 import os
 import argparse
 
@@ -39,11 +40,18 @@ def main(data_folder, fabdem_folder, soil_folder):
     download_sentinel2(data_folder)
     create_sentinel2_rasters(data_folder)
 
+    # Create the Sentinel 1 rasters
+    download_sentinel1(data_folder) 
+    create_sentinel1_aoi_date_difference(data_folder) 
+    create_sentinel1_rasters(data_folder)
+
     # Create the soil moisture and soil type rasters
     create_soil_moisture_rasters(data_folder)
     create_soil_type(data_folder, soil_folder)
 
     # Create the precipitation rasters
+    download_precipitation(data_folder)
+    create_precipitation_rasters(data_folder)
 
 if __name__ == "__main__":
 
