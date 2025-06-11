@@ -24,6 +24,9 @@ def setup():
     return config
 
 def download_sentinel1(data_folder):
+    """
+    Download Sentinel 1 data for each of the AOIs.
+    """
 
     config = setup()
 
@@ -33,7 +36,7 @@ def download_sentinel1(data_folder):
     aois["one_week_previous"] = aois["aoi_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["aoi_date"] - pd.Timedelta(days=180)
 
-    sentinel1_folder = f"{data_folder}/sentinel_1"
+    sentinel1_folder = f"{data_folder}/full_subevent/sentinel_1"
     if not os.path.isdir(sentinel1_folder):
         os.mkdir(sentinel1_folder)
 
@@ -120,6 +123,10 @@ def download_sentinel1(data_folder):
                 time.sleep(0.5)
 
 def create_sentinel1_aoi_date_difference(data_folder):
+    """
+    Create rasters of the Sentinel 1 data for each individual AOI.
+    Add a band to the raster representing the time difference between Sentinel 1 data capture and the subevent date.
+    """
 
     config = setup()
     catalog = SentinelHubCatalog(config=config)
@@ -130,7 +137,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
     aois["one_week_previous"] = aois["aoi_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["aoi_date"] - pd.Timedelta(days=180)
 
-    sentinel1_raster_folder = f"{data_folder}/raster_sentinel1/"
+    sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
     if not os.path.isdir(sentinel1_raster_folder):
         os.mkdir(sentinel1_raster_folder)
 
@@ -140,7 +147,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
         aoi_path = f"{sentinel1_raster_folder}/aoi_{aoi_id}"
 
         # some of the larger AOIs needed to be split up in order to download them. Join them back together to form the full AOI
-        sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/sentinel_1/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
+        sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/full_subevent/sentinel_1/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
         gdal.PushErrorHandler('CPLQuietErrorHandler')
         gdal.Warp(f"{aoi_path}.tif", sub_aoi_paths, 
                   srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"], resampleAlg="bilinear")
@@ -180,7 +187,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
         sentinel1_availability.to_file(aoi_path + ".geojson")
 
         # import the sentinel 1 data for the aoi and its associated metadata
-        with rasterio.open(f"{data_folder}/raster_sentinel1/aoi_{aoi_id}.tif") as s1_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_sentinel1/aoi_{aoi_id}.tif") as s1_file:
             bounds = tuple(s1_file.bounds)
             height = s1_file.height
             width = s1_file.width
@@ -210,10 +217,13 @@ def create_sentinel1_aoi_date_difference(data_folder):
         os.remove(aoi_path + "_date_diff.tif")
 
 def create_sentinel1_rasters(data_folder):
+    """
+    Combine the Sentinel 1 individual AOI rasters into rasters for the full subevent, corresponding to the CEMS labels.
+    """
     
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    sentinel1_raster_folder = f"{data_folder}/raster_sentinel1/"
+    sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
 
     for index in tqdm(range(len(raster_extents))):
 
@@ -230,7 +240,7 @@ def create_sentinel1_rasters(data_folder):
             resampleAlg="bilinear", width=raster_width, height=raster_height, outputBounds=raster_bounds)
         
         # set the date difference band to 0 outside of the AOI bounds
-        with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)
         with rasterio.open(f"{sentinel1_raster_folder}/{subevent}.tif") as sentinel1_file:
             sentinel1_raster = sentinel1_file.read()

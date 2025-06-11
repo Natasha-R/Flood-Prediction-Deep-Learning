@@ -7,16 +7,19 @@ import numpy as np
 import argparse
 gdal.UseExceptions()
 
-def create_soil_type(data_folder, full_soil_folder):
+def create_soil_type(data_folder, global_folder):
+    """
+    Create rasters representing the soil classes and soil bulk density, corresponding to the CEMS label rasters.
+    """
 
     # define the metadata and folder locations
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    global_soil_classes_path = f"{full_soil_folder}/global_soil_classes.tif"
-    global_soil_bulk_density_path = f"{full_soil_folder}/global_soil_bulk_density.tif"
-    soil_class_folder = f"{data_folder}/raster_soil_class"
+    global_soil_classes_path = f"{global_folder}/global_soil_classes.tif"
+    global_soil_bulk_density_path = f"{global_folder}/global_soil_bulk_density.tif"
+    soil_class_folder = f"{data_folder}/full_subevent/raster_soil_class"
     if not os.path.isdir(soil_class_folder):
         os.mkdir(soil_class_folder)
-    soil_bulk_density_folder = f"{data_folder}/raster_soil_bulk_density"
+    soil_bulk_density_folder = f"{data_folder}/full_subevent/raster_soil_bulk_density"
     if not os.path.isdir(soil_bulk_density_folder):
         os.mkdir(soil_bulk_density_folder)
 
@@ -29,7 +32,7 @@ def create_soil_type(data_folder, full_soil_folder):
         subevent = raster_extents["subevent"][index]
                 
         # import the CEMS label as a reference to the extent of the AOIs
-        with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)
 
         # create files for soil class and soil bulk density
@@ -72,8 +75,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create rasters for soil classes and soil bulk density data.")
     
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--soil_folder", required=True, help="The path to the folder containing the global soil values.")
+    parser.add_argument("--global_folder", required=True, help="The path to the folder containing the global data")
 
     args = parser.parse_args()
 
-    create_soil_type(args.data_folder, args.soil_folder)
+    create_soil_type(args.data_folder, args.global_folder)

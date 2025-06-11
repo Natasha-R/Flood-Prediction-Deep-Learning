@@ -7,9 +7,14 @@ from shapely.ops import unary_union
 import rasterio
 from shapely.geometry import box
 
-def find_aoi_extents(data_folder):
+def create_aoi_metadata(data_folder):
+    """
+    Create metadata corresponding to each individual AOI.
+    This includes geographical extent boundaries and dates.
+    Unique keys are also created for different combinations of geometries and dates.
+    """
 
-    cems_geojson_folder = f"{data_folder}/geojson_cems"
+    cems_geojson_folder = f"{data_folder}/full_subevent/geojson_cems"
     extent_dict = {"event": [], "subevent":[], "date":[], "geometry":[]}
 
     # find the path to each aoi, and create a dataframe containing its extent
@@ -62,8 +67,11 @@ def find_aoi_extents(data_folder):
         os.mkdir(metadata_folder)
     extent.to_file(f"{metadata_folder}/aoi_extent.geojson")
 
-
-def find_raster_extents(data_folder):
+def create_raster_metadata(data_folder):
+    """
+    Create metadata corresponding to each raster.
+    This includes geographical extent boundaries and dates.
+    """
     
     cems_raster_folder = f"{data_folder}/raster_cems"
     extent_dict = {"event": [], "subevent":[], "date":[], "geometry":[], "height":[], "width":[]}
@@ -88,12 +96,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create GeoJSON files representing the extent of the CEMS AOIs and rasters")
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--find_aoi_extents", action="store_true", default=False, help="Create metadata describing the AOI extents.")
-    parser.add_argument("--find_raster_extents", action="store_true", default=False, help="Create metadata describing the raster extents.")
+    parser.add_argument("--create_aoi_metadata", action="store_true", default=False, help="Create metadata describing the AOIs.")
+    parser.add_argument("--create_raster_metadata", action="store_true", default=False, help="Create metadata describing the rasters.")
     args = parser.parse_args()
 
-    if args.find_aoi_extents:
-        find_aoi_extents(args.data_folder)
+    if args.create_aoi_metadata:
+        create_aoi_metadata(args.data_folder)
 
-    if args.find_raster_extents:
-        find_raster_extents(args.data_folder)
+    if args.create_raster_metadata:
+        create_raster_metadata(args.data_folder)

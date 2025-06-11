@@ -11,14 +11,17 @@ import numpy as np
 from rasterio.enums import Resampling
 gdal.UseExceptions()
 
-def extract_dem_aoi(fabdem_folder, data_folder):
+def extract_dem_aoi(data_folder, global_folder):
+    """
+    Extract the DEM data from FABDEM for each of the AOIs.
+    """
 
     # import the aoi and DEM metadata
-    fabdem = gpd.read_file(f"{fabdem_folder}/FABDEM_v1-2_tiles.geojson").to_crs(epsg=4326)
+    fabdem = gpd.read_file(f"{global_folder}/global_fabdem/FABDEM_v1-2_tiles.geojson").to_crs(epsg=4326)
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
     aois = aois.drop_duplicates(["geometry_id"], ignore_index=True)
 
-    dem_aoi_folder = f"{data_folder}/raster_dem_aoi"
+    dem_aoi_folder = f"{data_folder}/full_subevent/raster_dem_aoi"
     if not os.path.isdir(dem_aoi_folder):
         os.mkdir(dem_aoi_folder)
 
@@ -27,7 +30,7 @@ def extract_dem_aoi(fabdem_folder, data_folder):
         # extract which DEM tiles are covered by the aoi polygon
         geometry = aois.loc[idx, "geometry"]
         tiles = list(fabdem[fabdem.intersects(geometry)]["file_name"])
-        tiles = [f"{fabdem_folder}/{tile[0]}{tile[2:]}" for tile in tiles]
+        tiles = [f"{global_folder}/global_fabdem/{tile[0]}{tile[2:]}" for tile in tiles]
 
         # for each DEM tile, extract data only within the aoi polygon, and save temporarily
         for index, tile in enumerate(tiles):
@@ -64,6 +67,9 @@ def extract_dem_aoi(fabdem_folder, data_folder):
             os.remove(path)
 
 def create_dem_rasters(data_folder):
+    """
+    Create rasters of the DEM data, corresponding to the CEMS label rasters.
+    """
     
     # import in the metadata on all of the AOIs and rasters
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
@@ -71,8 +77,8 @@ def create_dem_rasters(data_folder):
     rasters["raster_geometry"] = rasters["geometry"]
     aois = aois.merge(rasters[["subevent", "height", "width", "raster_geometry"]], how="left", on="subevent")
 
-    dem_aoi_folder = f"{data_folder}/raster_dem_aoi"
-    dem_raster_folder = f"{data_folder}/raster_dem"
+    dem_aoi_folder = f"{data_folder}/full_subevent/raster_dem_aoi"
+    dem_raster_folder = f"{data_folder}/full_subevent/raster_dem"
     if not os.path.isdir(dem_raster_folder):
         os.mkdir(dem_raster_folder)
 
@@ -95,15 +101,15 @@ def create_dem_rasters(data_folder):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create DEM files clipped to the extent of the AOIs, and save in rasters matching to the CEMS labels.")
-    parser.add_argument("--fabdem_folder", default=None, help="The path to the folder containing the full downloaded FABDEM.")
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
     parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
     parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
 
     args = parser.parse_args()
 
     if args.extract_dem_aoi:
-        extract_dem_aoi(fabdem_folder=args.fabdem_folder, data_folder=args.data_folder)
+        extract_dem_aoi(data_folder=args.data_folder, global_folder=args.global_folder)
 
     if args.create_dem_rasters:
         create_dem_rasters(data_folder=args.data_folder)

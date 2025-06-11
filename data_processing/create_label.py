@@ -12,23 +12,19 @@ import wget
 import shutil
 gdal.UseExceptions()
 
-def create_permanent_water_geojson(data_folder):
+def create_permanent_water_geojson(data_folder, global_folder):
+    """
+    Create geojsons containing polygons corresponding to all permanent waters and seas (as classified by OSM).
+    """
 
-    # import in metadata and the seas and oceans polygons, download first if it doesn't exist
-    seas_polygons_path = f"{data_folder}/water-polygons-split-4326"
-    if not os.path.isdir(seas_polygons_path):
-        print("Downloading the seas and polygons shape file...")
-        wget.download("https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip", out=f"{seas_polygons_path}.zip")
-        shutil.unpack_archive(f"{seas_polygons_path}.zip", data_folder)
-        os.remove(f"{seas_polygons_path}.zip")
-    
+    # import the seas and oceans polygons
     print("Importing in all seas and oceans polygons...")
-    seas = gpd.read_file(f"{seas_polygons_path}/water_polygons.shp")
+    seas = gpd.read_file(f"{global_folder}/global_seas_polygons/water_polygons.shp")
     print("Import complete")
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
 
-    permanent_water_geojson_folder = f"{data_folder}/geojson_permanent_water"
+    permanent_water_geojson_folder = f"{data_folder}/full_subevent/geojson_permanent_water"
     if not os.path.isdir(permanent_water_geojson_folder):
         os.mkdir(permanent_water_geojson_folder)
 
@@ -65,10 +61,13 @@ def create_permanent_water_geojson(data_folder):
         time.sleep(1)
 
 def create_permanent_water_raster(data_folder):
+    """
+    Convert the geojsons of permanent waters and seas into raster format.
+    """
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    permanent_water_geojson_folder = f"{data_folder}/geojson_permanent_water"
-    permanent_water_raster_folder = f"{data_folder}/raster_permanent_water"
+    permanent_water_geojson_folder = f"{data_folder}/full_subevent/geojson_permanent_water"
+    permanent_water_raster_folder = f"{data_folder}/full_subevent/raster_permanent_water"
     if not os.path.isdir(permanent_water_raster_folder):
         os.mkdir(permanent_water_raster_folder)
 
@@ -81,7 +80,7 @@ def create_permanent_water_raster(data_folder):
         utm_raster_extent = raster_extents["geometry"].to_crs(permanent_water.crs)[index].bounds
         wgs84_raster_extent = raster_extents["geometry"][index].bounds
 
-        with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
              reference_label = reference_file.read(1)
              height, width = reference_label.shape
              meta = reference_file.meta.copy()
@@ -107,6 +106,9 @@ def create_permanent_water_raster(data_folder):
         os.remove(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif")
 
 def combine_cems_and_permanent_water(data_folder):
+    """
+    Subtract the permanent water from the flood labels in the CEMS rasters, to create the final label raster.
+    """
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
 
@@ -114,18 +116,18 @@ def combine_cems_and_permanent_water(data_folder):
         
         # load in the rasters
         subevent = raster_extents["subevent"][index]
-        with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as cems_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as cems_file:
             cems_raster = cems_file.read(1)
             meta = cems_file.meta.copy()
             meta.pop("nodata", None)
-        with rasterio.open(f"{data_folder}/raster_permanent_water/{subevent}.tif") as perm_water_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_permanent_water/{subevent}.tif") as perm_water_file:
             perm_water_raster = perm_water_file.read(1)
 
         # remove all flood labels from locations of permanent water
         label_raster = np.where(perm_water_raster == 1, 1, cems_raster)
 
         # save the final data as a raster
-        label_raster_folder = f"{data_folder}/raster_label"
+        label_raster_folder = f"{data_folder}/full_subevent/raster_label"
         if not os.path.isdir(label_raster):
             os.mkdir(label_raster)
         with rasterio.open(f"{label_raster_folder}/{subevent}.tif", "w", **meta, compress="LZW") as file:
@@ -137,7 +139,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate GeoJSON and raster files comprising the permanent water and combine them with the CEMS labels.")
 
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-
+    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
     parser.add_argument("--create_permanent_water_geojson", action="store_true", default=False, help="Create the permanent water GeoJSON files.")
     parser.add_argument("--create_permanent_water_raster", action="store_true", default=False, help="Create the permanent water rasters from the GeoJSON files.")
     parser.add_argument("--combine_cems_and_permanent_water", action="store_true", default=False, help="Combine the permanent water and CEMS data to create the labels.")
@@ -145,7 +147,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.create_permanent_water_geojson:
-        create_permanent_water_geojson(args.data_folder)
+        create_permanent_water_geojson(args.data_folder, args.global_folder)
 
     if args.create_permanent_water_raster:
         create_permanent_water_raster(args.data_folder)

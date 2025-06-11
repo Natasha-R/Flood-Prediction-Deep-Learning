@@ -11,11 +11,14 @@ import time
 import argparse
 from tqdm import tqdm
 
-def download_precipitation(data_folder):
+def download_precipitation(data_folder, global_folder):
+    """
+    Download the (global) precipitation data corresponding to the date of each of the subevent rasters.
+    """
 
     # set up and import metadata
     earthaccess.login(strategy="environment")
-    global_precipitation_folder = f"{data_folder}/global_precipitation"
+    global_precipitation_folder = f"{global_folder}/global_precipitation"
     if not os.path.isdir(global_precipitation_folder):
         os.mkdir(global_precipitation_folder)
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
@@ -26,8 +29,6 @@ def download_precipitation(data_folder):
         all_dates += list(pd.date_range(end=raster_extents["date"].dt.date[index], periods=42).date)
     all_dates = list(set(all_dates))
     all_dates.sort()
-
-    all_dates=['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04', '2025-01-05', '2025-01-06', '2025-01-07', '2025-01-08', '2025-01-09', '2025-01-10', '2025-01-11', '2025-01-12', '2025-01-13', '2025-01-14', '2025-01-15', '2025-01-16', '2025-01-17', '2025-01-18', '2025-01-19', '2025-01-20', '2025-01-21', '2025-01-22', '2025-01-23', '2025-01-24', '2025-01-25', '2025-01-26', '2025-01-27', '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31', '2025-02-01', '2025-02-02', '2025-02-03', '2025-02-04', '2025-02-05']
 
     # download the precipitation data for each date
     for date in tqdm(all_dates):
@@ -79,14 +80,16 @@ def download_precipitation(data_folder):
         os.remove(file_path)
         time.sleep(10)
 
-def create_precipitation_rasters(data_folder):
+def create_precipitation_rasters(data_folder, global_folder):
+    """
+    From the downloaded global precipitation data, create precipitation rasters corresponding to the CEMS label rasters.
+    """
 
     # set up and import metadata
-    precipitation_folder = f"{data_folder}/precipitation"
+    precipitation_folder = f"{data_folder}/full_subevent/raster_precipitation"
     if not os.path.isdir(precipitation_folder):
         os.mkdir(precipitation_folder)
-    precipitation_folder = f"{data_folder}/precipitation"
-    global_precipitation_folder = f"{data_folder}/global_precipitation"
+    global_precipitation_folder = f"{global_folder}/global_precipitation"
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     
     for index in tqdm(range(len(raster_extents))):
@@ -167,13 +170,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download precipitation data and create GeoTIFF rasters.")
     
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
     parser.add_argument("--download_precipitation", action="store_true", default=False, help="Download the global precipitation data.")
     parser.add_argument("--create_precipitation_rasters", action="store_true", default=False, help="Create raster files of the precipitation data, matching to the CEMS labels.")
 
     args = parser.parse_args()
 
     if args.download_precipitation:
-        download_precipitation(args.data_folder)
+        download_precipitation(args.data_folder, args.global_folder)
 
     if args.create_precipitation_rasters:
-        create_precipitation_rasters(args.data_folder)
+        create_precipitation_rasters(args.data_folder, args.global_fodler)

@@ -11,7 +11,10 @@ import pandas as pd
 import argparse
 gdal.UseExceptions()
 
-def download_soil_moisture_data(data_folder):
+def download_soil_moisture_data(data_folder, global_folder):
+    """
+    Download the (global) soil moisture data corresponding to the date of each of the subevent rasters.
+    """
 
     earthaccess.login(strategy="environment")
 
@@ -21,7 +24,7 @@ def download_soil_moisture_data(data_folder):
     raster_extents["one_week_previous"] = raster_extents["date"] - pd.Timedelta(days=7)
     all_dates = list(set(list(raster_extents["one_day_previous"]) + list(raster_extents["one_week_previous"])))
 
-    global_soil_moisture_folder = f"{data_folder}/global_soil_moisture"
+    global_soil_moisture_folder = f"{global_folder}/global_soil_moisture/"
     if not os.path.isdir(global_soil_moisture_folder):
         os.mkdir(global_soil_moisture_folder)
 
@@ -54,14 +57,16 @@ def download_soil_moisture_data(data_folder):
         os.remove(file_path)
         time.sleep(10)
 
-def create_soil_moisture_rasters(data_folder):
+def create_soil_moisture_rasters(data_folder, global_folder):
+    """
+    From the downloaded global soil moisture data, create precipitation rasters corresponding to the CEMS label rasters.
+    """
 
     # import the metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     raster_extents["one_day_previous"] = raster_extents["date"] - pd.Timedelta(days=1)
     raster_extents["one_week_previous"] = raster_extents["date"] - pd.Timedelta(days=7)
-    soil_moisture_folder = f"{data_folder}/raster_soil_moisture"
-
+    soil_moisture_folder = f"{data_folder}/full_subevent/raster_soil_moisture/"
     if not os.path.isdir(soil_moisture_folder):
         os.mkdir(soil_moisture_folder)
         os.mkdir(f"{soil_moisture_folder}/one_day_previous")
@@ -81,7 +86,7 @@ def create_soil_moisture_rasters(data_folder):
             folder_path = f"{soil_moisture_folder}/{time_frame}/"
 
             # import the label raster to match the soil moisture raster to
-            with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+            with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
                 reference_label = reference_file.read(1)
 
             # extract the surface and rootzone soil moisture layers
@@ -89,7 +94,7 @@ def create_soil_moisture_rasters(data_folder):
             for layer in ["sm_surface", "sm_rootzone"]:
                 
                 # extract only the raster area from the corresponding global GeoTIFF and convert to WGS84
-                gdal.Warp(f"{folder_path}/{subevent}_{layer}.tif", f"{data_folder}/global_soil_moisture/{date}_{layer}_global.tif", 
+                gdal.Warp(f"{folder_path}/{subevent}_{layer}.tif", f"{global_folder}/global_soil_moisture/{date}_{layer}_global.tif", 
                             srcSRS="EPSG:6933", dstSRS="EPSG:4326", format='GTiff',
                             resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
 
@@ -127,13 +132,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create raster files representing the soil moisture values.")
     parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
     parser.add_argument("--download_soil_moisture_data", action="store_true", default=False, help="Download the global soil moisture data.")
     parser.add_argument("--create_soil_moisture_rasters", action="store_true", default=False, help="Create raster files of the soil moisture data, matching to the CEMS labels.")
 
     args = parser.parse_args()
 
     if args.download_soil_moisture_data:
-        download_soil_moisture_data(args.data_folder)
+        download_soil_moisture_data(args.data_folder, args.global_folder)
 
     if args.create_soil_moisture_rasters:
-        create_soil_moisture_rasters(args.data_folder)
+        create_soil_moisture_rasters(args.data_folder, args.global_folder)

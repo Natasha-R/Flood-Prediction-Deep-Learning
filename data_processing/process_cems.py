@@ -10,8 +10,9 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def find_paths(event_folder, file):
-    # Returns the paths in the event_folder for the given files. 
-    # For example, folder=EMSR756, file=aoi.
+    """
+    Returns the paths in the event_folder for the given files. For example, folder=EMSR756, file=aoi.
+    """
     search_patterns = {"aoi": [("areaOfInterestA", ".json"), ("area_of_interest", ".shp")],
                        "observed": [("observedEventA", ".json"), ("observed_event_a", ".shp"), ("crisis_information_poly", ".shp")],
                        "database": [("source", ".dbf")]}
@@ -25,9 +26,11 @@ def find_paths(event_folder, file):
     raise Exception(f"No paths were found for {event_folder} {file}")
 
 def find_subevent(match_file, paths):
-    # Find the path to the subevent contained in paths which matches the same subevent in match_file
-    # For example, if match_file is a path to an AOI, and paths is a list of dbf files,
-    # the dbf path to the subevent matching the subevent in the AOI path is returned.
+    """
+    Find the path to the subevent contained in paths which matches the same subevent in match_file.
+    For example, if match_file is a path to an AOI, and paths is a list of dbf files, 
+    the dbf path to the subevent matching the subevent in the AOI path is returned.
+    """
     subevent = "_".join(match_file.split("/")[-1].split("_")[:4])
     matching_paths = [path for path in paths if subevent in path]
     if len(matching_paths) != 1:
@@ -36,8 +39,9 @@ def find_subevent(match_file, paths):
         return matching_paths[0]
     
 def create_raster_values(notation):
-
-    # match flooded area, trace, AOI and other to the associated raster burn value
+    """
+    Match 'flooded area', 'trace', 'AOI' and other types to an associated raster burn value.
+    """
     if notation == None:
         return 3
     elif notation.lower() == "flood trace" or notation.lower() == "flood traces":
@@ -50,8 +54,9 @@ def create_raster_values(notation):
         return 0
     
 def find_utm(lat_coord, lon_coord):
-
-    # Given a latitude and longitude coord, find the corresponding UTM coordinate system
+    """
+    Given a latitude and longitude coord, find the corresponding UTM coordinate system.
+    """
     zone = min(int((lon_coord + 180) / 6) + 1, 60)
     if lat_coord >= 0:
         epsg = 32600 + zone  # WGS84 Northern Hemisphere
@@ -60,11 +65,14 @@ def find_utm(lat_coord, lon_coord):
     return epsg
 
 def create_cems_geojson(data_folder):
+    """
+    Process the raw CEMS data and convert into geojson, retaining the flood labels and AOI extent.
+    """
 
-    cems_path = f"{data_folder}/raw_cems"
+    cems_path = f"{data_folder}/raw_cems/"
     if not os.path.isdir(cems_path):
         raise Exception("No raw_cems folder!")
-    geojson_folder = f"{data_folder}/geojson_cems"
+    geojson_folder = f"{data_folder}/full_subevent/geojson_cems/"
     if not os.path.isdir(geojson_folder):
         os.mkdir(geojson_folder)
         
@@ -125,7 +133,8 @@ def create_cems_geojson(data_folder):
         for date, values in obs_by_date:
             
             # don't save events for which there is no recorded date
-            missing_date_indicators = [None, "Not Applicable", "Not Applicable or dd/mm/aaaa", "0000/00/00", "1899/12/30", "30/12/1899", pd.Timestamp("1899-12-30 00:00:00")]
+            missing_date_indicators = [None, "Not Applicable", "Not Applicable or dd/mm/aaaa", 
+                                       "0000/00/00", "1899/12/30", "30/12/1899", pd.Timestamp("1899-12-30 00:00:00")]
             if date in missing_date_indicators:
                 continue
 
@@ -147,13 +156,16 @@ def create_cems_geojson(data_folder):
             proj_values.to_file(f"{geojson_folder}/{proj_values_path}.geojson", driver="GeoJSON")
 
 def create_cems_raster(data_folder):
+    """
+    Save the processed CEMS geojsons into raster format, representing the CEMS flood labels and AOIs.
+    """
 
-    raster_folder = f"{data_folder}/raster_cems"
+    raster_folder = f"{data_folder}/full_subevent/raster_cems"
     if not os.path.isdir(raster_folder):
         os.mkdir(raster_folder)
     
     # find all geojson files in geojson_folder
-    geojson_folder = f"{data_folder}/geojson_cems/"
+    geojson_folder = f"{data_folder}/full_subevent/geojson_cems/"
     all_geojson = [os.path.join(root, file) for root, dirs, files in os.walk(geojson_folder) for file in files if file.endswith(".geojson")]
 
     for geojson_path in tqdm(all_geojson):
