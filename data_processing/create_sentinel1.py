@@ -33,8 +33,8 @@ def download_sentinel1(data_folder):
     # import the metadata and calculate the time frame for data collection
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
     aois = aois.drop_duplicates(["geometry_event_date_id"], ignore_index=True)
-    aois["one_week_previous"] = aois["aoi_date"] - pd.Timedelta(days=7)
-    aois["180_days_previous"] = aois["aoi_date"] - pd.Timedelta(days=180)
+    aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
+    aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
 
     sentinel1_folder = f"{data_folder}/full_subevent/sentinel_1"
     if not os.path.isdir(sentinel1_folder):
@@ -133,9 +133,8 @@ def create_sentinel1_aoi_date_difference(data_folder):
 
     # import the metadata
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    aois = aois.drop_duplicates(["geometry_event_date_id"], ignore_index=True)
-    aois["one_week_previous"] = aois["aoi_date"] - pd.Timedelta(days=7)
-    aois["180_days_previous"] = aois["aoi_date"] - pd.Timedelta(days=180)
+    aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
+    aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
 
     sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
     if not os.path.isdir(sentinel1_raster_folder):
@@ -144,7 +143,8 @@ def create_sentinel1_aoi_date_difference(data_folder):
     for index in tqdm(range(len(aois))):
 
         aoi_id = aois.loc[index, 'geometry_event_date_id']
-        aoi_path = f"{sentinel1_raster_folder}/aoi_{aoi_id}"
+        subevent = aois.loc[index, "subevent"]
+        aoi_path = f"{sentinel1_raster_folder}/{subevent}_aoi_{index}"
 
         # some of the larger AOIs needed to be split up in order to download them. Join them back together to form the full AOI
         sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/full_subevent/sentinel_1/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
@@ -187,7 +187,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
         sentinel1_availability.to_file(aoi_path + ".geojson")
 
         # import the sentinel 1 data for the aoi and its associated metadata
-        with rasterio.open(f"{data_folder}/full_subevent/raster_sentinel1/aoi_{aoi_id}.tif") as s1_file:
+        with rasterio.open(aoi_path + ".tif") as s1_file:
             bounds = tuple(s1_file.bounds)
             height = s1_file.height
             width = s1_file.width
@@ -205,7 +205,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
             date_difference = date_diff_file.read(1)
 
         # create a raster representing the AOI, containing bands for the VV and VH data, and the date difference metadata as a layer
-        with rasterio.open(f"{sentinel1_raster_folder}/aoi_{aoi_id}.tif", 'w', **meta, compress="LZW") as file:
+        with rasterio.open(aoi_path + ".tif", 'w', **meta, compress="LZW") as file:
             file.write(vv_data, 1)
             file.write(vh_data, 2)
             file.write(date_difference, 3)
@@ -222,7 +222,6 @@ def create_sentinel1_rasters(data_folder):
     """
     
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
     sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
 
     for index in tqdm(range(len(raster_extents))):
@@ -234,8 +233,8 @@ def create_sentinel1_rasters(data_folder):
         raster_width = int(raster_extents["width"].iloc[index])
 
         # for each of the aois contained within a particular subevent raster, join them together to form one full raster for sentinel 1 data
-        aoi_ids = list(aois[aois["subevent"]==subevent]["geometry_event_date_id"])
-        gdal.Warp(f"{sentinel1_raster_folder}/{subevent}.tif", [f"{sentinel1_raster_folder}/aoi_{aoi_id}.tif" for aoi_id in aoi_ids], 
+        aois_in_raster = [f"{sentinel1_raster_folder}/{file}" for file in os.listdir(sentinel1_raster_folder) if subevent in file]
+        gdal.Warp(f"{sentinel1_raster_folder}/{subevent}.tif", aois_in_raster, 
             srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"],
             resampleAlg="bilinear", width=raster_width, height=raster_height, outputBounds=raster_bounds)
         
