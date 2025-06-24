@@ -61,6 +61,7 @@ def extract_dem_aoi(data_folder, global_folder):
         merged_image = np.round(merged_image).astype(np.int16)
         with rasterio.open(f"{dem_aoi_folder}/dem_{aois.loc[idx, 'geometry_id']}.tif", "w", **merged_meta, compress="LZW") as file:
             file.write(merged_image)
+            file.set_band_description(1, "DEM")
         for file in temp_tiles:
             file.close()
         for path in temp_tiles_paths:

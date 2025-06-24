@@ -64,18 +64,18 @@ def create_soil_moisture_rasters(data_folder, global_folder):
 
     # import the metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    raster_extents["one_day_previous"] = raster_extents["date"] - pd.Timedelta(days=1)
-    raster_extents["one_week_previous"] = raster_extents["date"] - pd.Timedelta(days=7)
-    soil_moisture_folder = f"{data_folder}/full_subevent/raster_soil_moisture/"
-    if not os.path.isdir(soil_moisture_folder):
-        os.mkdir(soil_moisture_folder)
-        os.mkdir(f"{soil_moisture_folder}/one_day_previous")
-        os.mkdir(f"{soil_moisture_folder}/one_week_previous")
+    raster_extents["one_day"] = raster_extents["date"] - pd.Timedelta(days=1)
+    raster_extents["one_week"] = raster_extents["date"] - pd.Timedelta(days=7)
+    soil_moisture_folders = [f"{data_folder}/full_subevent/raster_soil_moisture_one_day/",
+                             f"{data_folder}/full_subevent/raster_soil_moisture_one_week/"]
+    for soil_moisture_folder in soil_moisture_folders:
+        if not os.path.isdir(soil_moisture_folder):
+            os.mkdir(soil_moisture_folder)
 
     for index in tqdm(range(len(raster_extents))):
 
         # extract data for both one day previous to the subevent, and one week before
-        for time_frame in ["one_day_previous", "one_week_previous"]:
+        for time_frame in ["one_day", "one_week"]:
             
             # extract out the metadata for the subevent raster
             date = raster_extents[time_frame].dt.date[index]
@@ -83,7 +83,7 @@ def create_soil_moisture_rasters(data_folder, global_folder):
             height = int(raster_extents["height"].iloc[index])
             width = int(raster_extents["width"].iloc[index])
             subevent = raster_extents["subevent"][index]
-            folder_path = f"{soil_moisture_folder}/{time_frame}/"
+            folder_path = f"{soil_moisture_folder}/raster_soil_moisture_{time_frame}/"
 
             # import the label raster to match the soil moisture raster to
             with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
