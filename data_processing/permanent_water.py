@@ -1,0 +1,135 @@
+import argparse
+import osmnx as ox
+import geopandas as gpd
+import pandas as pd
+from tqdm import tqdm
+import time
+import os
+from shapely.geometry import shape, box
+import rasterio
+import numpy as np
+from osgeo import gdal
+import datetime
+
+def download_global_permanent_water(data_folder, global_folder):
+
+    # create a global grid of 1x1 degree polygons 
+    grid_path = f"{data_folder}/metadata/global_grid_1x1.geojson"
+    if not os.path.isfile(grid_path):
+        polygons, ids = [], []
+        for longitude in range(-180, 180):
+            for latitude in range(-90, 90):
+                polygons.append(box(longitude, latitude, longitude+1, latitude+1))
+                ids.append(f"{latitude}_{longitude}")
+        global_grid = gpd.GeoDataFrame({"grid_id": ids, "geometry": polygons}, crs="EPSG:4326")
+        global_grid.to_file(f"{data_folder}/metadata/global_grid_1x1.geojson", driver="GeoJSON")
+
+    global_grid = gpd.read_file(f"{data_folder}/metadata/global_grid_1x1_reduced.geojson")
+
+    # for each grid tile, download all water polygons and lines from OSM
+    tags = {"natural": ["water"],
+            "waterway": True,
+            "landuse": ["reservoir"]}
+    for index in tqdm(range(3382, len(global_grid))): ##### THIS NEEDS TO BE CHANGED AFTERWARDS!!!
+        time.sleep(10)
+        geometry = global_grid["geometry"][index].bounds
+        grid_id = global_grid["grid_id"][index]
+        try:
+            permanent_water = ox.features_from_bbox(bbox=geometry, tags=tags).reset_index()
+            permanent_water = permanent_water[(permanent_water["element"] == "way") | (permanent_water["element"] == "relation")][["geometry"]].reset_index(drop=True)
+            if not permanent_water.empty:
+                permanent_water.to_file(f"{global_folder}/global_permanent_water/{grid_id}.geojson")
+                print("\n", datetime.datetime.now(), grid_id, index, flush=True)
+        except Exception as exception:
+            print(f"\n {grid_id}: {exception} ({datetime.datetime.now()})", flush=True)
+            continue
+
+def create_permanent_water_rasters(data_folder, global_folder):
+
+    # import the seas and oceans polygons
+    print("Importing in all seas and oceans polygons...")
+    seas = gpd.read_file(f"{global_folder}/global_seas_polygons/water_polygons.shp")
+    print("Import complete")
+
+    # read in metadata
+    raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+    global_grid = gpd.read_file(f"{data_folder}/metadata/global_grid_1x1_reduced.geojson")
+    permanent_water_raster_folder = f"{data_folder}/full_subevent/raster_permanent_water"
+    if not os.path.isdir(permanent_water_raster_folder):
+        os.mkdir(permanent_water_raster_folder)
+
+    for index in tqdm(range(len(raster_extents))):
+
+        subevent = raster_extents["subevent"][index]
+        tif_path = f"{permanent_water_raster_folder}/{subevent}.tif"
+        geojson_path = f"{permanent_water_raster_folder}/{subevent}.geojson"
+        if os.path.isfile(tif_path):
+            continue
+
+        geometry = raster_extents["geometry"][index].bounds
+
+        # return all seas and oceans polygons that fall within the raster extent
+        seas_polygons = seas.iloc[list(seas.sindex.intersection(geometry))]
+
+        # extract all water polygons from the intersecting permanent water grid tiles
+        grid_intersects = global_grid[global_grid.intersects(raster_extents["geometry"][index])]
+        grid_paths = [f"{global_folder}/global_permanent_water/{grid_id}.geojson" for grid_id in list(grid_intersects["grid_id"])]
+        water_polygons = pd.concat([gpd.read_file(grid_path) for grid_path in grid_paths if os.path.isfile(grid_path)]).drop_duplicates("geometry")
+
+        # merge all sea and water polygons and then clip to the extent of the raster
+        permanent_water = pd.concat([seas_polygons, water_polygons], ignore_index=True)[["geometry"]]
+        permanent_water = gpd.clip(permanent_water, raster_extents.iloc[[index]])
+
+        # convert to a coordinate system that uses metres, and save as geojson
+        crs = gpd.read_file(f"{data_folder}/full_subevent/geojson_labels/{subevent}.geojson").crs
+        permanent_water = permanent_water.to_crs(crs)
+        permanent_water.to_file(geojson_path)
+
+        # find the extents of the raster in different coordinate systems
+        utm_raster_extent = raster_extents["geometry"].to_crs(permanent_water.crs)[index].bounds
+        wgs84_raster_extent = raster_extents["geometry"][index].bounds
+
+        # use the label as the reference to create the permanent water raster
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
+             reference_label = reference_file.read(1)
+             height, width = reference_label.shape
+             meta = reference_file.meta.copy()
+             meta.pop("nodata", None)
+
+        # rasterize the permanent water polygons and match to the cems label raster extent
+        gdal.Rasterize(f"{permanent_water_raster_folder}/{subevent}_utm.tif", geojson_path, 
+                       format="GTiff", xRes=10, yRes=10, burnValues=[1.0], resampleAlg="nearest", outputBounds=utm_raster_extent)
+        gdal.Warp(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif", f"{permanent_water_raster_folder}/{subevent}_utm.tif", 
+                  srcSRS=permanent_water.crs, dstSRS="EPSG:4326", width=width, height=height, format="GTiff", outputBounds=wgs84_raster_extent,
+                  resampleAlg="nearest", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"])
+        
+        # remove all of the permanent water data from outside of the label AOIs and save as raster
+        with rasterio.open(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif") as perm_water_file:
+            perm_water_raster = perm_water_file.read(1)
+        perm_water_masked = np.where(reference_label == 0, 0, perm_water_raster)
+        with rasterio.open(f"{permanent_water_raster_folder}/{subevent}.tif", "w", **meta, compress="LZW") as file:
+            file.write(perm_water_masked, 1)
+            file.set_band_description(1, "permanent_water")
+            file.nodata = None
+            
+        # delete the temporary intermediary files
+        os.remove(f"{permanent_water_raster_folder}/{subevent}_utm.tif")
+        os.remove(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif")
+        os.remove(f"{permanent_water_raster_folder}/{subevent}.geojson")
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description="Extract data on permanent water from OSM.")
+
+    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
+    parser.add_argument("--download_global_permanent_water", action="store_true", default=False, help="Download global permanent water data from OSM")
+    parser.add_argument("--create_permanent_water_rasters", action="store_true", default=False, help="Create permanent water rasters corresponding to the CEMS labels.")
+
+    args = parser.parse_args()
+
+    if args.download_global_permanent_water:
+        download_global_permanent_water(args.data_folder, args.global_folder)
+
+    if args.create_permanent_water_rasters:
+        create_permanent_water_rasters(args.data_folder, args.global_folder)
