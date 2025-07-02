@@ -1,6 +1,6 @@
-from data_processing.process_cems import create_cems_geojson, create_cems_raster
+from data_processing.labels import create_cems_geojson, create_cems_raster, combine_cems_and_permanent_water
 from data_processing.metadata import create_aoi_metadata, create_raster_metadata
-from data_processing.label import create_permanent_water_geojson, create_permanent_water_raster, combine_cems_and_permanent_water
+from data_processing.permanent_water import download_global_permanent_water, create_permanent_water_rasters
 from data_processing.dem import extract_dem_aoi, create_dem_rasters
 from data_processing.sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
 from data_processing.soil_moisture import download_soil_moisture_data, create_soil_moisture_rasters
@@ -19,7 +19,7 @@ import argparse
 
 def main(data_folder, global_folder):
 
-    ########## Processing the labels
+    ########## Downloading and processing the labels and input features
 
     # Process the CEMS data
     create_cems_geojson(data_folder)
@@ -29,13 +29,11 @@ def main(data_folder, global_folder):
     create_aoi_metadata(data_folder)
     create_raster_metadata(data_folder)
 
-    # Modify the CEMS rasters with permanent water indicators, to create the final labels
-    create_permanent_water_geojson(data_folder, global_folder)
-    create_permanent_water_raster(data_folder)
+    # Create the permanent water rasters and modify the CEMS rasters to create the final labels
+    # download_global_permanent_water(data_folder, global_folder) ## only needs to be run once
+    create_permanent_water_rasters(data_folder, global_folder)
     combine_cems_and_permanent_water(data_folder)
     
-    ########## Downloading and processing the input features
-
     # Create the DEM rasters
     extract_dem_aoi(data_folder, global_folder)
     create_dem_rasters(data_folder)

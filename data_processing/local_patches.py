@@ -17,8 +17,8 @@ def create_label_local_patches(data_folder):
     # read in the metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = {}
-    if not os.path.isdir(f"{data_folder}/local_patch/label/"):
-        os.mkdir(f"{data_folder}/local_patch/label/")
+    if not os.path.isdir(f"{data_folder}/local/label/"):
+        os.mkdir(f"{data_folder}/local/label/")
 
     for index in tqdm(range(len(raster_extents))):
 
@@ -29,11 +29,11 @@ def create_label_local_patches(data_folder):
         new_bounds = list(raster_extents["geometry"][index].bounds)
         new_bounds[1] -= 0.03
         new_bounds[2] += 0.07
-        gdal.Warp(destNameOrDestDS=f"{data_folder}/local_patch/label/{subevent}_padded.tif", 
+        gdal.Warp(destNameOrDestDS=f"{data_folder}/local/label/{subevent}_padded.tif", 
                   srcDSOrSrcDSTab=f"{data_folder}/full_subevent/raster_label/{subevent}.tif", 
-                  resampleAlg="nearest", creationOptions=["COMPRESS=LZW"], outputBounds=new_bounds)
+                  resampleAlg="nearest", outputBounds=new_bounds)
 
-        with rasterio.open(f"{data_folder}/local_patch/label/{subevent}_padded.tif") as full_subevent_file:
+        with rasterio.open(f"{data_folder}/local/label/{subevent}_padded.tif") as full_subevent_file:
 
             # calculate the number of patches in the full raster
             width = full_subevent_file.width
@@ -59,10 +59,10 @@ def create_label_local_patches(data_folder):
                 else: 
                     selected_patches.append(patch_index)
 
-                # save the new patch in the local_patch/label folder
+                # save the new patch in the local/label folder
                 meta.update({"transform": full_subevent_file.window_transform(window),
                             "height": 256, "width": 256})
-                with rasterio.open(f"{data_folder}/local_patch/label/{subevent}_{patch_index:06}.tif", "w", **meta, compress="LZW") as file:
+                with rasterio.open(f"{data_folder}/local/label/{subevent}_{patch_index:06}.tif", "w", **meta, compress="LZW") as file:
                     file.write(patch)
 
         # save the indices of the selected patches, so they can be utilised extracting patches from the other data features
@@ -70,7 +70,7 @@ def create_label_local_patches(data_folder):
                                       "num_patches": num_patches,
                                       "patches_per_column": patches_per_column,
                                       "patches_per_row": patches_per_row}
-        os.remove(f"{data_folder}/local_patch/label/{subevent}_padded.tif")
+        os.remove(f"{data_folder}/local/label/{subevent}_padded.tif")
     
     json.dump(subevent_patches, open(f"{data_folder}/metadata/subevent_patches.json", "w"))
 
@@ -83,12 +83,14 @@ def create_features_local_patches(data_folder):
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = json.load(open(f"{data_folder}/metadata/subevent_patches.json"))
     features = ["precipitation", "dem", "permanent_water", "sentinel1", "sentinel2", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
+    features = ["dem", "permanent_water", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
+    features = ["sentinel2"]
     resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", 
                     "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear",
                     "soil_class": "nearest", "permanent_water": "nearest"}
     for feature in features:
-        if not os.path.isdir(f"{data_folder}/local_patch/{feature}/"):
-            os.mkdir(f"{data_folder}/local_patch/{feature}/")
+        if not os.path.isdir(f"{data_folder}/local/{feature}/"):
+            os.mkdir(f"{data_folder}/local/{feature}/")
 
     for feature in tqdm(features, desc="feature"):
 
@@ -103,12 +105,12 @@ def create_features_local_patches(data_folder):
             new_bounds = list(raster_extents["geometry"][index].bounds)
             new_bounds[1] -= 0.03
             new_bounds[2] += 0.07
-            gdal.Warp(destNameOrDestDS=f"{data_folder}/local_patch/{feature}/{subevent}_padded.tif", 
+            gdal.Warp(destNameOrDestDS=f"{data_folder}/local/{feature}/{subevent}_padded.tif", 
                     srcDSOrSrcDSTab=f"{data_folder}/full_subevent/raster_{feature}/{subevent}.tif", 
-                    resampleAlg=resample_alg[feature], creationOptions=["COMPRESS=LZW"], outputBounds=new_bounds)
+                    resampleAlg=resample_alg[feature], outputBounds=new_bounds)
 
             # extract out patches from the full subevent file for the given feature
-            with rasterio.open(f"{data_folder}/local_patch/{feature}/{subevent}_padded.tif") as full_subevent_file:
+            with rasterio.open(f"{data_folder}/local/{feature}/{subevent}_padded.tif") as full_subevent_file:
                 meta = full_subevent_file.meta.copy()
                 descriptions = full_subevent_file.descriptions
 
@@ -125,13 +127,13 @@ def create_features_local_patches(data_folder):
                     # save the patch
                     meta.update({"transform": full_subevent_file.window_transform(window),
                                  "height": 256, "width": 256})
-                    with rasterio.open(f"{data_folder}/local_patch/{feature}/{subevent}_{patch_index:06}.tif", "w", **meta, compress="LZW") as file:
+                    with rasterio.open(f"{data_folder}/local/{feature}/{subevent}_{patch_index:06}.tif", "w", **meta, compress="LZW") as file:
                         file.write(patch)
                         for i, description in enumerate(descriptions, start=1):
                             if description is not None:
                                 file.set_band_description(i, description)
 
-            os.remove(f"{data_folder}/local_patch/{feature}/{subevent}_padded.tif")
+            os.remove(f"{data_folder}/local/{feature}/{subevent}_padded.tif")
 
 if __name__ == "__main__":
 

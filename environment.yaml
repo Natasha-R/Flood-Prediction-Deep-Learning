@@ -17,10 +17,20 @@ dependencies:
     - torchvision==0.21.0+cu126
     - torchaudio==2.6.0+cu126
     - scipy
-    - timm
-    - segmentation_models_pytorch
     - tqdm
     - torchinfo
     - torchmetrics
     - tifffile
     - geopandas
+    - contextily
+    - earthaccess
+    - yaml
+    - rasterio
+    - json
+    - shapely
+    - osmnx
+    - sentinelhub
+    - creds
+
+
+    
