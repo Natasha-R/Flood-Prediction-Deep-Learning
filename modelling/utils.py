@@ -27,16 +27,20 @@ def get_logger():
     return logger
 
 def check_paths(args):
+    # check if the config file, data folder and modelling folder paths exist
     for path in [args.config_path, args.data_folder, args.modelling_folder]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Path: {path} does not exist")
         
 def check_cuda():
+    # check if cuda is available
     if not torch.cuda.is_available():
         raise RuntimeError("No GPU available!")
     
 def load_config(config_path, logger):
-
+    """
+    Load in and process the modelling configuration file.
+    """
     logger.info(f"Reading from config: {config_path}")
     with open(config_path) as file:
         config = yaml.safe_load(file)
@@ -48,12 +52,17 @@ def load_config(config_path, logger):
 
 def load_model(config, device, logger, pretrained_path=None):
 
+    # load the model architecture
     if config["architecture"].lower()=="test":
         model = architectures.TestModel(config, device)
+    elif config["architecture"].lower()=="basicunet":
+        model = architectures.BasicUNet(config, device)
 
+    # load in any pretrained model weights
     if pretrained_path:
         model.load_state_dict(torch.load(pretrained_path, weights_only=False, map_location=torch.device(device)))
 
+    # put the model onto the GPU(s)
     device_ids = list(range(torch.cuda.device_count()))
     device_names = [torch.cuda.get_device_name(device_id) for device_id in device_ids]
     if device == "cuda":

@@ -6,7 +6,6 @@ from tqdm import tqdm
 import numpy as np
 import time
 import os 
-import sys
 import modelling.utils as utils
 import argparse
 from visualise import plot_losses
@@ -61,7 +60,7 @@ def train(config_path, data_folder, modelling_folder, device, logger):
             logger.info(f"Saved the model to: {model_save_path}")
 
         if config["calculate_metrics_on_epoch"] != 0 and ((epoch % config["calculate_metrics_on_epoch"]) == 0):
-            metrics.calculate_metrics(config, config_name, model, validation_loader, modelling_folder, epoch, logger, device)
+            metrics.calculate_metrics(config, config_name, model, validation_loader, modelling_folder, epoch, logger, device, subset="validation")
 
     plot_losses(losses["total_train_losses"], losses["total_validation_losses"], config_name, modelling_folder)
 
