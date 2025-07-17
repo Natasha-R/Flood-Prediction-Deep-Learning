@@ -131,8 +131,8 @@ def create_soil_moisture_rasters(data_folder, global_folder):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create raster files representing the soil moisture values.")
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_soil_moisture_data", action="store_true", default=False, help="Download the global soil moisture data.")
     parser.add_argument("--create_soil_moisture_rasters", action="store_true", default=False, help="Create raster files of the soil moisture data, matching to the CEMS labels.")
 

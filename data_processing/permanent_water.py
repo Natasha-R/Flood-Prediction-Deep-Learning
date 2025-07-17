@@ -30,7 +30,7 @@ def download_global_permanent_water(data_folder, global_folder):
     tags = {"natural": ["water"],
             "waterway": True,
             "landuse": ["reservoir"]}
-    for index in tqdm(range(3382, len(global_grid))): ##### THIS NEEDS TO BE CHANGED AFTERWARDS!!!
+    for index in tqdm(len(global_grid)):
         time.sleep(10)
         geometry = global_grid["geometry"][index].bounds
         grid_id = global_grid["grid_id"][index]
@@ -53,7 +53,7 @@ def create_permanent_water_rasters(data_folder, global_folder):
 
     # read in metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    global_grid = gpd.read_file(f"{data_folder}/metadata/global_grid_1x1_reduced.geojson")
+    global_grid = gpd.read_file(f"{global_folder}/global_permanent_water/global_grid_1x1_reduced.geojson")
     permanent_water_raster_folder = f"{data_folder}/full_subevent/raster_permanent_water"
     if not os.path.isdir(permanent_water_raster_folder):
         os.mkdir(permanent_water_raster_folder)
@@ -81,7 +81,7 @@ def create_permanent_water_rasters(data_folder, global_folder):
         permanent_water = gpd.clip(permanent_water, raster_extents.iloc[[index]])
 
         # convert to a coordinate system that uses metres, and save as geojson
-        crs = gpd.read_file(f"{data_folder}/full_subevent/geojson_labels/{subevent}.geojson").crs
+        crs = gpd.read_file(f"{data_folder}/full_subevent/geojson_cems/{subevent}.geojson").crs
         permanent_water = permanent_water.to_crs(crs)
         permanent_water.to_file(geojson_path)
 
@@ -98,7 +98,7 @@ def create_permanent_water_rasters(data_folder, global_folder):
 
         # rasterize the permanent water polygons and match to the cems label raster extent
         gdal.Rasterize(f"{permanent_water_raster_folder}/{subevent}_utm.tif", geojson_path, 
-                       format="GTiff", xRes=10, yRes=10, burnValues=[1.0], resampleAlg="nearest", outputBounds=utm_raster_extent)
+                       format="GTiff", xRes=10, yRes=10, burnValues=[1.0], outputBounds=utm_raster_extent)
         gdal.Warp(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif", f"{permanent_water_raster_folder}/{subevent}_utm.tif", 
                   srcSRS=permanent_water.crs, dstSRS="EPSG:4326", width=width, height=height, format="GTiff", outputBounds=wgs84_raster_extent,
                   resampleAlg="nearest", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"])
@@ -121,8 +121,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Extract data on permanent water from OSM.")
 
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_global_permanent_water", action="store_true", default=False, help="Download global permanent water data from OSM")
     parser.add_argument("--create_permanent_water_rasters", action="store_true", default=False, help="Create permanent water rasters corresponding to the CEMS labels.")
 

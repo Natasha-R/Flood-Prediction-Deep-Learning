@@ -355,7 +355,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download Sentinel 2 data for each of the AOIS")
     
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--find_sentinel2_availability", action="store_true", default=False, help="Create metadata describing the availability of Sentinel 2 data.")
     parser.add_argument("--find_minimal_cloud_cover", action="store_true", default=False, help="From the available Sentinel 2 data, find the data with the minimum cloud cover.")
     parser.add_argument("--download_sentinel2", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")

@@ -9,6 +9,7 @@ from rasterio.enums import Resampling
 import numpy as np
 import time
 import argparse
+import datetime
 from tqdm import tqdm
 
 def download_precipitation(data_folder, global_folder):
@@ -103,6 +104,9 @@ def create_precipitation_rasters(data_folder, global_folder):
         file_name = f"{precipitation_folder}/{subevent}.tif"
         num_of_bands = 16
 
+        if os.path.isfile(file_name):
+            continue
+
         # determine the dates preceding the subevent and the associated global precipitation rasters for those dates
         precipitation_dates = list(pd.date_range(end=date, periods=42).date)
         global_precipitation_paths = [f"{global_precipitation_folder}/{precipitation_date}_global.tif" for precipitation_date in precipitation_dates]
@@ -130,11 +134,11 @@ def create_precipitation_rasters(data_folder, global_folder):
             file.nodata = None
 
         # match the precipitation geotiff to the subevent raster's extent
-        gdal.Warp(file_name, file_name, format='GTiff',
+        gdal.Warp(file_name, file_name, format='GTiff', creationOptions=["COMPRESS=LZW", "BIGTIFF=YES"],
                   resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
-            
+
         # import the label raster with aois to match the precipitation raster to
-        with rasterio.open(f"{data_folder}/raster_cems/{subevent}.tif") as reference_file:
+        with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)
 
         # import the precipitation data
@@ -169,8 +173,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download precipitation data and create GeoTIFF rasters.")
     
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_precipitation", action="store_true", default=False, help="Download the global precipitation data.")
     parser.add_argument("--create_precipitation_rasters", action="store_true", default=False, help="Create raster files of the precipitation data, matching to the CEMS labels.")
 
@@ -180,4 +184,4 @@ if __name__ == "__main__":
         download_precipitation(args.data_folder, args.global_folder)
 
     if args.create_precipitation_rasters:
-        create_precipitation_rasters(args.data_folder, args.global_fodler)
+        create_precipitation_rasters(args.data_folder, args.global_folder)

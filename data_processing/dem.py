@@ -102,8 +102,8 @@ def create_dem_rasters(data_folder):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create DEM files clipped to the extent of the AOIs, and save in rasters matching to the CEMS labels.")
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--global_folder", default=None, help="The path to the folder containing the global data")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
     parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
 

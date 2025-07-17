@@ -104,7 +104,7 @@ def download_sentinel1(data_folder):
         subevent = aois.loc[index, "subevent"]
         save_data_folder = f"{sentinel1_folder}/aoi_{aois.loc[index, "geometry_event_date_id"]}"
 
-        if not os.path.isdir(save_data_folder) or index==241:
+        if not os.path.isdir(save_data_folder):
             print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
@@ -307,7 +307,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download Sentinel 1 data for each of the AOIS")
     
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--find_sentinel1_availability", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")
     parser.add_argument("--download_sentinel1", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")
     parser.add_argument("--create_sentinel1_aoi_date_difference", action="store_true", default=False, help="Create a raster for each AOI and add a date difference band to it")

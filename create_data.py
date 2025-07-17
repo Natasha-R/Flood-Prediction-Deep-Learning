@@ -67,8 +67,8 @@ def main(data_folder, global_folder):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create the full data stack for all CEMS data stored in 'data_folder'.")
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
-    parser.add_argument("--global_folder", required=True, help="The path to the folder containing the global data")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     
     args = parser.parse_args()
 

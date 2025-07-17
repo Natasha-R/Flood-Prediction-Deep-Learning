@@ -74,6 +74,8 @@ def create_cems_geojson(data_folder):
     cems_path = f"{data_folder}/raw_cems/"
     if not os.path.isdir(cems_path):
         raise Exception("No raw_cems folder!")
+    if not os.path.isdir(f"{data_folder}/full_subevent"):
+        os.mkdir(f"{data_folder}/full_subevent")
     geojson_folder = f"{data_folder}/full_subevent/geojson_cems/"
     if not os.path.isdir(geojson_folder):
         os.mkdir(geojson_folder)
@@ -205,8 +207,8 @@ def combine_cems_and_permanent_water(data_folder):
 
         # save the final data as a raster
         label_raster_folder = f"{data_folder}/full_subevent/raster_label"
-        if not os.path.isdir(label_raster):
-            os.mkdir(label_raster)
+        if not os.path.isdir(label_raster_folder):
+            os.mkdir(label_raster_folder)
         with rasterio.open(f"{label_raster_folder}/{subevent}.tif", "w", **meta, compress="LZW") as file:
             file.write(label_raster, 1)
             file.nodata = None
@@ -215,7 +217,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate GeoJSON and raster files to represent the CEMS labels.")
 
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--create_geojson", action="store_true", default=False, help="Create the GeoJSON files.")
     parser.add_argument("--create_raster", action="store_true", default=False, help="Create the rasters from the GeoJSON files.")
     parser.add_argument("--combine_cems_and_permanent_water", default=False, help="Combine the permanent water and CEMS data to create the labels.")

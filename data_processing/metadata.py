@@ -73,7 +73,7 @@ def create_raster_metadata(data_folder):
     This includes geographical extent boundaries and dates.
     """
     
-    cems_raster_folder = f"{data_folder}/raster_cems"
+    cems_raster_folder = f"{data_folder}/full_subevent/raster_cems"
     extent_dict = {"event": [], "subevent":[], "date":[], "geometry":[], "height":[], "width":[]}
 
     # find the path to each raster, and create a dataframe containing its extent
@@ -95,7 +95,7 @@ def create_raster_metadata(data_folder):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create GeoJSON files representing the extent of the CEMS AOIs and rasters")
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--create_aoi_metadata", action="store_true", default=False, help="Create metadata describing the AOIs.")
     parser.add_argument("--create_raster_metadata", action="store_true", default=False, help="Create metadata describing the rasters.")
     args = parser.parse_args()

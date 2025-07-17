@@ -17,6 +17,8 @@ def create_label_local_patches(data_folder):
     # read in the metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = {}
+    if not os.path.isdir(f"{data_folder}/local"):
+        os.mkdir(f"{data_folder}/local/")
     if not os.path.isdir(f"{data_folder}/local/label/"):
         os.mkdir(f"{data_folder}/local/label/")
 
@@ -83,8 +85,6 @@ def create_features_local_patches(data_folder):
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = json.load(open(f"{data_folder}/metadata/subevent_patches.json"))
     features = ["precipitation", "dem", "permanent_water", "sentinel1", "sentinel2", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
-    features = ["dem", "permanent_water", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
-    features = ["sentinel2"]
     resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", 
                     "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear",
                     "soil_class": "nearest", "permanent_water": "nearest"}
@@ -139,7 +139,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Divide the subevent rasters into 256x256 patches to form the local dataset.")
     
-    parser.add_argument("--data_folder", required=True, help="The path to the data folder.")
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--create_label_local_patches", action="store_true", default=False, help="Divide the label rasters into 256x256 patches.")
     parser.add_argument("--create_features_local_patches", action="store_true", default=False, help="Divide all of the data input features into 256x256 patches, matching to the label patches.")
 
