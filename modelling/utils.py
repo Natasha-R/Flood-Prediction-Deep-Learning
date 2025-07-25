@@ -4,7 +4,7 @@ import os
 import yaml
 import torch.nn as nn
 import sys
-import modelling.architectures as architectures
+import architectures
 
 def get_logger():
 
@@ -37,11 +37,12 @@ def check_cuda():
     if not torch.cuda.is_available():
         raise RuntimeError("No GPU available!")
     
-def load_config(config_path, logger):
+def load_config(config_path, logger=None):
     """
     Load in and process the modelling configuration file.
     """
-    logger.info(f"Reading from config: {config_path}")
+    if logger:
+        logger.info(f"Reading from config: {config_path}")
     with open(config_path) as file:
         config = yaml.safe_load(file)
 
