@@ -5,6 +5,8 @@ import tifffile as tf
 import numpy as np
 import json
 import os
+import argparse
+from tqdm import tqdm
 from collections import defaultdict
 
 class FloodDataset(torch.utils.data.Dataset):
@@ -105,8 +107,8 @@ class Normalize(object):
 
           # define the number of bands contained within each feature
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
-                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation"], 
-                                      [1, 1, 2, 2, 10, 16])}
+                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", "sentinel1"], 
+                                      [1, 1, 2, 2, 10, 16, 3])}
           
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           def nested_defaultdict():
@@ -154,30 +156,24 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
 
      # define the features to normalize
      features = [(feature_name, band_index) for feature_name, feature_count in 
-                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2"], 
-                     [1, 1, 2, 2, 12]) 
+                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1"], 
+                     [1, 1, 2, 2, 12, 3]) 
                  for band_index in range(feature_count)]
      features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
 
-     for feature, band in features:
+     for feature, band in tqdm(features, desc="Feature"):
 
           paths = [path.path for path in os.scandir(f"{data_folder}/full_subevent/raster_{feature}/") if path.path.endswith(".tif")]
           summed, summed_squared, total_values = 0, 0, 0
           minimum, maximum = None, None
 
           # read in each subevent
-          for path in paths:
+          for path in tqdm(paths, desc="Path"):
                raster = tf.imread(path)
                reference = tf.imread(f"{data_folder}/full_subevent/raster_cems/{path.split('/')[-1]}")
                if raster.ndim == 2: raster = np.expand_dims(raster, axis=-1)
-               try:
-                    raster = raster[:, :, band]
-               except:
-                    print(f"Issue with {path} for {feature} (band {band})", flush=True)
-                    continue
-               if raster.shape[:2] != reference.shape:
-                    print(f"Issue with {path} for {feature} (band {band})", flush=True)
-                    continue
+               raster = raster[:, :, band]
+               
                # utilise only data within the AOIs
                raster = raster[reference != 0]
 
@@ -217,8 +213,19 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
      for band in [10, 11]:
           zscore["sentinel2"][band]["shift"] = 1
           zscore["sentinel2"][band]["scale"] = zscore["sentinel2"][band]["max"]
+     zscore["sentinel1"][2]["shift"] = 0
+     zscore["sentinel1"][2]["scale"] = zscore["sentinel1"][2]["max"]
 
      # permanently save the values in a json file
      with open(f"{data_folder}/metadata/zscore.json", 'w') as file:
           json.dump(zscore, file)
-          
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
+    parser.add_argument("--normalize", action="store_true", default=False, help="Calculate the normalization of the dataset.")
+    args = parser.parse_args()
+
+    if args.normalize:
+        normalize(data_folder=args.data_folder)
