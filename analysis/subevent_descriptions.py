@@ -8,6 +8,8 @@ from scipy import stats
 import argparse
 from geopy.geocoders import Nominatim
 import pycountry_convert as pc
+import shapely
+pd.options.mode.chained_assignment = None
 
 def find_subevent_descriptions(data_folder, global_folder):
     """
@@ -23,7 +25,7 @@ def find_subevent_descriptions(data_folder, global_folder):
     geolocator = Nominatim(user_agent="geoapi")
 
     # define the characteristics used to describe each subevent
-    characteristics = ["subevent", "mean_dem", "std_dem", "mean_precipitation_daily", "max_precipitation_daily", "std_precipitation_daily", "total_precipitation_daily",
+    characteristics = ["event", "subevent", "mean_dem", "std_dem", "mean_precipitation_daily", "max_precipitation_daily", "std_precipitation_daily", "total_precipitation_daily",
                        "total_precipitation_15_28", "total_precipitation_29_42", "mean_precipitation_15_28", "mean_precipitation_29_42", "proportion_flood_label", 
                        "proportion_event_graded_label", "proportion_extent_versus_trace_label", "evaluation_label_quality", "proportion_perm_water",
                        "mean_soil_bulk_density", "mean_surface_soil_moisture_one_day", "mean_root_soil_moisture_one_day", "mean_surface_soil_moisture_one_week", 
@@ -37,6 +39,7 @@ def find_subevent_descriptions(data_folder, global_folder):
         geometry = raster_extents.loc[index, "geometry"]
         event = raster_extents.loc[index, "event"]
         subevent = raster_extents.loc[index, "subevent"]
+        subevent_descriptions["event"].append(event)
         subevent_descriptions["subevent"].append(subevent)
         reference = tf.imread(f"{data_folder}/full_subevent/raster_label/{subevent}.tif")
 
@@ -149,11 +152,19 @@ def find_subevent_descriptions(data_folder, global_folder):
         subevent_descriptions["latitude"].append(latitude)
         
         # country and continent
-        country_code = geolocator.reverse((latitude, longitude)).raw["address"]["country_code"].upper()
-        country_name = pc.country_alpha2_to_country_name(country_code)
-        continent_name = pc.convert_continent_code_to_continent_name(pc.country_alpha2_to_continent_code(country_code))
-        subevent_descriptions["country"].append(country_name)
-        subevent_descriptions["continent"].append(continent_name)
+        country_code = geolocator.reverse((latitude, longitude))
+        if country_code == None:
+            subevent_descriptions["country"].append("UNKNOWN")
+            subevent_descriptions["continent"].append("UNKNOWN")
+        else:
+            country_code = country_code.raw["address"]["country_code"].upper()
+            country_name = pc.country_alpha2_to_country_name(country_code)
+            if country_name == 'Timor-Leste':
+                continent_name = "Asia"
+            else:
+                continent_name = pc.convert_continent_code_to_continent_name(pc.country_alpha2_to_continent_code(country_code))
+            subevent_descriptions["country"].append(country_name)
+            subevent_descriptions["continent"].append(continent_name)
 
         # date
         subevent_descriptions["month"].append(raster_extents.loc[0, "date"].month)
@@ -162,9 +173,13 @@ def find_subevent_descriptions(data_folder, global_folder):
         # level 4 and 5 basin areas
         for basin, basin_name in zip([lvl4_basin, lvl5_basin], ["lvl4_basin_area", "lvl5_basin_area"]):
             intersecting = basin[basin.geometry.intersects(geometry)]
-            intersecting["intersection_area"] = intersecting.geometry.intersection(geometry).area
-            basin_area = intersecting.sort_values("intersection_area", ascending=False).reset_index(drop=True).head(1)["SUB_AREA"].item()
-            subevent_descriptions[basin_name].append(basin_area)
+            if len(intersecting)==0:
+                subevent_descriptions[basin_name].append(0)
+            else:
+                intersecting["geometry"] = shapely.make_valid(intersecting["geometry"])
+                intersecting["intersection_area"] = intersecting.geometry.intersection(geometry).area
+                basin_area = intersecting.sort_values("intersection_area", ascending=False).reset_index(drop=True).head(1)["SUB_AREA"].item()
+                subevent_descriptions[basin_name].append(basin_area)
 
         # geographical size of the AOI areas in the raster
         subevent_aois = aois[aois["subevent"]==subevent]
@@ -173,8 +188,8 @@ def find_subevent_descriptions(data_folder, global_folder):
         # cause of the flood
         subevent_descriptions["flood_cause"].append(events[events["Code"]==event]["Cause"].item())
 
-    # save all of the subevent descriptions to a csv file
-    pd.DataFrame(subevent_descriptions).to_csv(f"{data_folder}/metadata/subevent_descriptions.csv")
+        # save all of the subevent descriptions to a csv file
+        pd.DataFrame(subevent_descriptions).to_csv(f"{data_folder}/metadata/subevent_descriptions.csv", index=False)
 
 if __name__ == "__main__":
 

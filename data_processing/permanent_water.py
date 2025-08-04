@@ -10,6 +10,7 @@ import rasterio
 import numpy as np
 from osgeo import gdal
 import datetime
+gdal.UseExceptions()
 
 def download_global_permanent_water(data_folder, global_folder):
 
@@ -116,6 +117,7 @@ def create_permanent_water_rasters(data_folder, global_folder):
         os.remove(f"{permanent_water_raster_folder}/{subevent}_utm.tif")
         os.remove(f"{permanent_water_raster_folder}/{subevent}_wgs84.tif")
         os.remove(f"{permanent_water_raster_folder}/{subevent}.geojson")
+        os.remove(f"{permanent_water_raster_folder}/{subevent}.tif.aux.xml")
 
 if __name__ == "__main__":
 

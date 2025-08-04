@@ -9,6 +9,9 @@ import argparse
 gdal.UseExceptions()
 
 def create_lulc_rasters(data_folder, global_folder):
+    """
+    Create LULC rasters for each subevent.
+    """
         
     # import metadata 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")

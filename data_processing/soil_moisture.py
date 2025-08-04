@@ -83,7 +83,7 @@ def create_soil_moisture_rasters(data_folder, global_folder):
             height = int(raster_extents["height"].iloc[index])
             width = int(raster_extents["width"].iloc[index])
             subevent = raster_extents["subevent"][index]
-            folder_path = f"{soil_moisture_folder}/raster_soil_moisture_{time_frame}/"
+            folder_path = f"{data_folder}/full_subevent/raster_soil_moisture_{time_frame}/"
 
             # import the label raster to match the soil moisture raster to
             with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
@@ -126,7 +126,7 @@ def create_soil_moisture_rasters(data_folder, global_folder):
                 file.set_band_description(2, "soil_moisture_rootzone")
                 file.nodata = None
 
-            os.remove(f"{folder_path}/{subevent}_{layer}.tif.aux.xml")
+            os.remove(f"{folder_path}/{subevent}.tif.aux.xml")
 
 if __name__ == "__main__":
 

@@ -105,7 +105,7 @@ def download_sentinel1(data_folder):
         save_data_folder = f"{sentinel1_folder}/aoi_{aois.loc[index, "geometry_event_date_id"]}"
 
         if not os.path.isdir(save_data_folder):
-            print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
+            # print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
             geometry = Geometry(aois.loc[index, "geometry"], CRS.WGS84)
@@ -226,8 +226,8 @@ def create_sentinel1_aoi_date_difference(data_folder):
         # some of the larger AOIs needed to be split up in order to download them. Join them back together to form the full AOI
         sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/full_subevent/sentinel_1/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
         gdal.PushErrorHandler('CPLQuietErrorHandler')
-        gdal.Warp(f"{aoi_path}.tif", sub_aoi_paths, 
-                  srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"], resampleAlg="bilinear")
+        gdal.Warp(f"{aoi_path}.tif", sub_aoi_paths, srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', 
+                  outputType=gdal.GDT_Int16, resampleAlg="bilinear")
         gdal.PopErrorHandler()
 
         # import the sentinel 1 data for the aoi and its associated metadata
@@ -278,8 +278,8 @@ def create_sentinel1_rasters(data_folder):
         # for each of the aois contained within a particular subevent raster, join them together to form one full raster for sentinel 1 data
         aois_in_raster = [f"{sentinel1_raster_folder}/{file}" for file in os.listdir(sentinel1_raster_folder) if subevent in file]
         gdal.Warp(f"{sentinel1_raster_folder}/{subevent}.tif", aois_in_raster, 
-            srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"],
-            resampleAlg="bilinear", width=raster_width, height=raster_height, outputBounds=raster_bounds)
+                  srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16,
+                  resampleAlg="bilinear", width=raster_width, height=raster_height, outputBounds=raster_bounds)
         
         # set the date difference band to 0 outside of the AOI bounds
         with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
@@ -305,13 +305,13 @@ def create_sentinel1_rasters(data_folder):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Download Sentinel 1 data for each of the AOIS")
+    parser = argparse.ArgumentParser(description="Download Sentinel 1 data and create rasters")
     
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
-    parser.add_argument("--find_sentinel1_availability", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")
-    parser.add_argument("--download_sentinel1", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")
-    parser.add_argument("--create_sentinel1_aoi_date_difference", action="store_true", default=False, help="Create a raster for each AOI and add a date difference band to it")
-    parser.add_argument("--create_sentinel1_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 2 data, matching to the CEMS labels.")
+    parser.add_argument("--find_sentinel1_availability", action="store_true", default=False, help="Create metadata describing the availability of Sentinel 2 data.")
+    parser.add_argument("--download_sentinel1", action="store_true", default=False, help="Download the Sentinel 1 data for each of the AOIs.")
+    parser.add_argument("--create_sentinel1_aoi_date_difference", action="store_true", default=False, help="Create a raster for each AOI and add a date difference band to it.")
+    parser.add_argument("--create_sentinel1_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data, matching to the CEMS labels.")
 
     args = parser.parse_args()
 

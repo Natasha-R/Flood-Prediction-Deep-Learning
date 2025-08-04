@@ -5,7 +5,7 @@ from data_processing.dem import extract_dem_aoi, create_dem_rasters
 from data_processing.sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
 from data_processing.soil_moisture import download_soil_moisture_data, create_soil_moisture_rasters
 from data_processing.soil_type import create_soil_type
-from data_processing.sentinel1 import download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters
+from data_processing.sentinel1 import find_sentinel1_availability, download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters
 from data_processing.precipitation import download_precipitation, create_precipitation_rasters
 from data_processing.local_patches import create_label_local_patches, create_features_local_patches
 import os
@@ -22,6 +22,7 @@ def main(data_folder, global_folder):
     ########## Downloading and processing the labels and input features
 
     # Process the CEMS data
+    print("Processing the labels...")
     create_cems_geojson(data_folder)
     create_cems_raster(data_folder)
 
@@ -35,32 +36,39 @@ def main(data_folder, global_folder):
     combine_cems_and_permanent_water(data_folder)
     
     # Create the DEM rasters
+    print("Creating DEM rasters...")
     extract_dem_aoi(data_folder, global_folder)
     create_dem_rasters(data_folder)
 
+    # Create the soil moisture and soil type rasters
+    print("Creating soil moisture and soil type rasters...")
+    download_soil_moisture_data(data_folder, global_folder)
+    create_soil_moisture_rasters(data_folder, global_folder)
+    create_soil_type(data_folder, global_folder)
+
+    # Create the precipitation rasters
+    print("Creating precipitation rasters...")
+    download_precipitation(data_folder, global_folder)
+    create_precipitation_rasters(data_folder, global_folder)
+
     # Create the Sentinel 2 rasters
+    print("Downloading and processing Sentinel 2 data...")
     find_sentinel2_availability(data_folder)
     find_minimal_cloud_cover(data_folder)
     download_sentinel2(data_folder)
     create_sentinel2_rasters(data_folder)
 
     # Create the Sentinel 1 rasters
+    print("Downloading and processing Sentinel 1 data...")
+    find_sentinel1_availability(data_folder)
     download_sentinel1(data_folder) 
     create_sentinel1_aoi_date_difference(data_folder) 
     create_sentinel1_rasters(data_folder)
 
-    # Create the soil moisture and soil type rasters
-    download_soil_moisture_data(data_folder, global_folder)
-    create_soil_moisture_rasters(data_folder, global_folder)
-    create_soil_type(data_folder, global_folder)
-
-    # Create the precipitation rasters
-    download_precipitation(data_folder, global_folder)
-    create_precipitation_rasters(data_folder, global_folder)
-
     ########## Creating the local patch dataset
 
     # Create local 256x256 patches from the labels and features
+    print("Creating local patches from the labels and features...")
     create_label_local_patches(data_folder)
     create_features_local_patches(data_folder)
 

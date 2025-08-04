@@ -180,7 +180,7 @@ def download_sentinel2(data_folder):
 
         save_data_folder = f"{sentinel2_folder}/aoi_{aois.loc[index, 'geometry_event_date_id']}/group_{aois.loc[index, 'aoi_group']}/"
         if not os.path.isdir(save_data_folder):
-            print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
+            # print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
             geometry = Geometry(aois.loc[index, "geometry"], CRS.WGS84)
