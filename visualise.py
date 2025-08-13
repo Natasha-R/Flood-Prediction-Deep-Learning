@@ -84,14 +84,16 @@ def visualise_predictions(config_path, data_folder, modelling_folder, device, lo
 
     logger.info(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
-def plot_losses(train_loss, validation_loss, config_name, modelling_folder):
+def plot_losses(losses, config_name, modelling_folder):
     """
     Plot the train and validation losses from model training.
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
-    ax.plot(range(1, len(train_loss)+1), train_loss, c="black", label="Train loss", linewidth=2)
-    ax.plot(range(1, len(validation_loss)+1), validation_loss, c="blue", label="Validation loss", linewidth=2)
-    ax.set_title(f"Train and validation losses", fontsize=15)
+    ax.plot(range(1, len(losses["total_train_losses"])+1), losses["total_train_losses"], c="red", label="Train Loss", linewidth=2)
+    ax.plot(range(1, len(losses["total_val_other_losses"])+1), losses["total_val_other_losses"], c="deepskyblue", label=f"'Other' Validation Loss", linewidth=2)
+    ax.plot(range(1, len(losses["total_val_subevent_losses"])+1), losses["total_val_subevent_losses"], c="blue", label=f"'Subevent' Validation Loss", linewidth=2)
+    ax.plot(range(1, len(losses["total_val_patches_losses"])+1), losses["total_val_patches_losses"], c="darkblue", label=f"'Patches' Validation Loss", linewidth=2)
+    ax.set_title(f"Train and Validation Losses", fontsize=15)
     ax.legend(fontsize=14), ax.grid(alpha=0.4)
     ax.tick_params(axis="both", which="major", labelsize=14)
     ax.set_xlabel("Epoch", fontsize=14), ax.set_ylabel("Loss", fontsize=14)

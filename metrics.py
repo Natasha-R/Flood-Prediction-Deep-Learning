@@ -7,7 +7,7 @@ import torch
 import pandas as pd
 import os
 
-def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset="validation", subevent=None, event=None):
+def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset="val_other", subevent=None, event=None):
 
     # define the metrics functions
     class_f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
@@ -31,11 +31,11 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
     labels = torch.concat(labels, dim=0)
 
     if config["separate_flood_trace_label"]:
-       class_names = ["no_flood", "flood trace", "flooded area"] 
-       class_indices = [1, 2, 3]
+       class_names = ["flooded_area",  "flood_trace", "no_flood"] 
+       class_indices = [3, 2, 1]
     else: 
-        class_names = ["no_flood", "flood"]
-        class_indices = [1, 2]
+        class_names = ["flood", "no_flood"]
+        class_indices = [2, 1]
 
     dataset_subset = "_".join([filter_type for filter_type in [subset, subevent, event] if filter_type])
     metrics = {"config_name": [config_name], "epoch": [epoch], "dataset_subset": [dataset_subset]}

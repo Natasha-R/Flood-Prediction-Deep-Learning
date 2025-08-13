@@ -19,7 +19,8 @@ class FloodDataset(torch.utils.data.Dataset):
           self.data_folder = data_folder
 
           # subset the data patches based on a particular train/validation split, subevent, or event
-          data_subset = pd.read_csv(f"{data_folder}/metadata/data_subset.csv")
+          
+          data_subset = pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")
           if subset:
                 data_subset = data_subset[data_subset["subset"]==subset]
           if subevent:
@@ -53,32 +54,11 @@ def create_data_loader(config, data_folder, subset=None, subevent=None, event=No
      """
      dataset = FloodDataset(config=config, data_folder=data_folder, subset=subset, subevent=subevent, event=event)
      loader = torch.utils.data.DataLoader(dataset,
-                                             batch_size=config["batch_size"],
-                                             num_workers=config["number_workers"],
-                                             shuffle=True,
-                                             pin_memory=True)
+                                          batch_size=config["batch_size"],
+                                          num_workers=config["number_workers"],
+                                          shuffle=True,
+                                          pin_memory=True)
      return loader
-
-def create_data_loaders(config, data_folder):
-     """
-     Create train and validation dataloaders for the flood dataset.
-     """
-     train_dataset = FloodDataset(config=config, data_folder=data_folder, subset="train")
-     validation_dataset = FloodDataset(config=config, data_folder=data_folder, subset="validation")
-     
-     train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                batch_size=config["batch_size"],
-                                                num_workers=config["number_workers"],
-                                                shuffle=True,
-                                                pin_memory=True)
-     
-     validation_loader = torch.utils.data.DataLoader(validation_dataset,
-                                                     batch_size=config["batch_size"],
-                                                     num_workers=config["number_workers"],
-                                                     shuffle=True,
-                                                     pin_memory=True)
-
-     return train_loader, validation_loader
 
 class ToTensor(object):
      def __call__(self, data):

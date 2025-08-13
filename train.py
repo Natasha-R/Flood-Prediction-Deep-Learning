@@ -14,13 +14,13 @@ def train(config_path, data_folder, modelling_folder, device, logger):
 
     config, config_name = utils.load_config(config_path, logger)
     model = utils.load_model(config, device, logger)
-    train_loader, validation_loader = data_pipeline.create_data_loaders(config=config, data_folder=data_folder)
+    data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, subset) for subset in ["train", "val_other", "val_subevent", "val_patches"]}
     loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True).to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["number_epochs"])
 
-    losses = {"total_train_losses": [], "total_validation_losses": [],
-              "epoch_train_losses": [], "epoch_validation_losses": []}
+    losses = {"total_train_losses": [], "total_val_other_losses": [], "total_val_subevent_losses": [], "total_val_patches_losses": [],
+              "epoch_train_losses": [], "epoch_val_other_losses": [], "epoch_val_subevent_losses": [], "epoch_val_patches_losses": []}
 
     for epoch in range(1, config["number_epochs"]+1):
 
@@ -28,7 +28,7 @@ def train(config_path, data_folder, modelling_folder, device, logger):
         losses["epoch_train_losses"], losses["epoch_validation_losses"] = [], []
 
         model.train()
-        for data in tqdm(train_loader, desc="Training:", leave=False):
+        for data in tqdm(data_loaders["train"], desc="Training", leave=False):
             optimizer.zero_grad()
             local_features = data["local_features"] # BCHW
             local_label = data["local_label"].to(device) # BHW
@@ -40,19 +40,21 @@ def train(config_path, data_folder, modelling_folder, device, logger):
             
         model.eval()
         with torch.no_grad():
-            for data in tqdm(validation_loader, desc="Validation loss:", leave=False):
-                local_features = data["local_features"]
-                local_label = data["local_label"].to(device)
-                model_output = model(local_features)
-                loss = loss_function(model_output, local_label)
-                losses["epoch_validation_losses"].append(loss.item())
+            for validation_loader in ["val_other", "val_subevent", "val_patches"]:
+                for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
+                    local_features = data["local_features"]
+                    local_label = data["local_label"].to(device)
+                    model_output = model(local_features)
+                    loss = loss_function(model_output, local_label)
+                    losses[f"epoch_{validation_loader}_losses"].append(loss.item())
 
         scheduler.step()
 
-        losses["total_train_losses"].append(sum(losses["epoch_train_losses"]) / len(losses["epoch_train_losses"]))
-        losses["total_validation_losses"].append(sum(losses["epoch_validation_losses"]) / len(losses["epoch_validation_losses"]))
-        epoch_duration = time.time() - epoch_start_time
-        logger.info(f"Epoch {epoch} ({epoch_duration:.0f} seconds) | Train loss: {losses["total_train_losses"][-1]:.3f} | Validation loss: {losses["total_validation_losses"][-1]:.3f}")
+        loss_string = f"Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
+        for loss_type in ["train", "val_other", "val_subevent", "val_patches"]:
+            losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
+            loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
+        logger.info(loss_string)
 
         if config["save_model_on_epoch"] != 0 and ((epoch % config["save_model_on_epoch"]) == 0):
             model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
@@ -60,9 +62,10 @@ def train(config_path, data_folder, modelling_folder, device, logger):
             logger.info(f"Saved the model to: {model_save_path}")
 
         if config["calculate_metrics_on_epoch"] != 0 and ((epoch % config["calculate_metrics_on_epoch"]) == 0):
-            metrics.calculate_metrics(config, config_name, model, validation_loader, modelling_folder, epoch, logger, device, subset="validation")
+            for type in ["train", "val_other", "val_subevent", "val_patches"]:
+                metrics.calculate_metrics(config, config_name, model, data_loaders[type], modelling_folder, epoch, logger, device, subset=type)
 
-    plot_losses(losses["total_train_losses"], losses["total_validation_losses"], config_name, modelling_folder)
+    plot_losses(losses, config_name, modelling_folder)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the model.")

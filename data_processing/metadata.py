@@ -92,12 +92,80 @@ def create_raster_metadata(data_folder):
     metadata_folder = f"{data_folder}/metadata"
     extent.to_file(f"{metadata_folder}/raster_extent.geojson")
 
+def create_empty_patch_csv(data_folder):
+    """
+    Create an empty csv, containing a row for each patch.
+    """
+    patches = os.listdir(f"{data_folder}/local/label")
+    patches.sort()
+    events = [patch.split("_")[0] for patch in patches]
+    subevents = ["_".join(patch.split("_")[:2]) for patch in patches]
+    subset = pd.DataFrame({"patch": patches, "event": events, "subevents": subevents})
+    subset["subset"] = None
+    subset.to_csv(f"{data_folder}/metadata/empty_data_subset.csv", index=False)
+
+def determine_data_split(data_folder):
+    """
+    Create metadata describing the main split of the dataset into train, validation and test subsets.
+    """
+    # read in the metadata
+    desc = pd.read_csv(f"{data_folder}/metadata/subevent_descriptions.csv")
+    all_patches = os.listdir(f"{data_folder}/local/label")
+    all_patches.sort()
+
+    # determine the patches that will form the 'subevent' validation and test sets
+    subevent_test = ["EMSR561_2022-01-29", "EMSR561_2022-02-01", "EMSR631_2022-09-11", "EMSR631_2022-09-23", 
+                    "EMSR692_2023-09-07", "EMSR692_2023-09-10", "EMSR692_2023-09-12", "EMSR692_2023-09-22",
+                    "EMSR720_2024-05-05", "EMSR720_2024-05-07", "EMSR720_2024-05-15", "EMSR773_2024-10-31", 
+                    "EMSR773_2024-11-03", "EMSR773_2024-11-10", "EMSR773_2024-11-18", "EMSR774_2024-10-30", 
+                    "EMSR774_2024-11-03", "EMSR774_2024-11-05", "EMSR774_2024-11-08"]
+    subevent_val = ["EMSR692_2023-09-15", "EMSR692_2023-09-18", "EMSR773_2024-11-06", "EMSR773_2024-11-15"]
+    subevent_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in subevent_test)]
+    subevent_val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in subevent_val)]
+
+    # determine the patches that will form the 'timing' test set
+    timing_test = ["EMSR555", "EMSR762", "EMSR637", "EMSR429", "EMSR768"]
+    timing_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in timing_test)]
+
+    # determine the patches that will form the 'other' test and validation sets
+    other_test = ["EMSR754", "EMSR779", "EMSR788", "EMSR570", "EMSR763", "EMSR764", "EMSR759", 
+                "EMSR756", "EMSR706", "EMSR758", "EMSR722", "EMSR431", "EMSR650"]
+    other_val = ["EMSR487", "EMSR663", "EMSR694"]
+    other_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in other_test)]
+    other_val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in other_val)]
+
+    # determine the patches that will form the 'patch' validation and test sets
+    splitting = list(desc[(desc["event"].isin(["EMSR774", "EMSR773", "EMSR720", "EMSR561", "EMSR631", "EMSR692"])) & ~desc["event"].isin(subevent_test) & ~desc["event"].isin(subevent_val)]["subevent"])
+    patches_eval_patches = [patch for subevent in splitting for index, patch in enumerate([patch for patch in all_patches if subevent in patch]) if index % 2 == 0]
+    patches_val_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 == 0]
+    patches_test_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 != 0]
+
+    # determine the patches that will form the training set
+    eval_patches = subevent_test_patches + subevent_val_patches + timing_test_patches + other_test_patches + other_val_patches + patches_val_patches + patches_test_patches
+    training_patches = list(set(all_patches)-set(eval_patches))
+
+    # create_empty_patch_csv(data_folder)
+
+    # save the assignment of the patches to the data subsets in a csv file
+    subset = pd.read_csv(f"{data_folder}/metadata/empty_data_subset.csv")
+    subset.loc[subset["patch"].isin(training_patches), "subset"] = "train"
+    subset.loc[subset["patch"].isin(other_test_patches), "subset"] = "test_other"
+    subset.loc[subset["patch"].isin(subevent_test_patches), "subset"] = "test_subevent"
+    subset.loc[subset["patch"].isin(patches_test_patches), "subset"] = "test_patches"
+    subset.loc[subset["patch"].isin(timing_test_patches), "subset"] = "test_timing"
+    subset.loc[subset["patch"].isin(other_val_patches), "subset"] = "val_other"
+    subset.loc[subset["patch"].isin(subevent_val_patches), "subset"] = "val_subevent"
+    subset.loc[subset["patch"].isin(patches_val_patches), "subset"] = "val_patches"
+    subset.to_csv(f"{data_folder}/metadata/data_subset.csv", index=False)
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create GeoJSON files representing the extent of the CEMS AOIs and rasters")
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--create_aoi_metadata", action="store_true", default=False, help="Create metadata describing the AOIs.")
     parser.add_argument("--create_raster_metadata", action="store_true", default=False, help="Create metadata describing the rasters.")
+    parser.add_argument("--determine_data_split", action="store_true", default=False, help="Create metadata describing the split of the dataset into train, validation and test subsets.")
+    
     args = parser.parse_args()
 
     if args.create_aoi_metadata:
@@ -105,3 +173,6 @@ if __name__ == "__main__":
 
     if args.create_raster_metadata:
         create_raster_metadata(args.data_folder)
+
+    if args.determine_data_split:
+        determine_data_split(args.data_folder)

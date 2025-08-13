@@ -23,6 +23,7 @@ def find_subevent_descriptions(data_folder, global_folder):
     lvl4_basin = gpd.read_file(f"{global_folder}/global_basins/lev04_basin.geojson").to_crs("EPSG:6933")
     lvl5_basin = gpd.read_file(f"{global_folder}/global_basins/lev05_basin.geojson").to_crs("EPSG:6933")
     geolocator = Nominatim(user_agent="geoapi")
+    num_patches = pd.Series("_".join(path.split("_")[:2]) for path in os.listdir(f"{data_folder}/local/label")).value_counts()
 
     # define the characteristics used to describe each subevent
     characteristics = ["event", "subevent", "mean_dem", "std_dem", "mean_precipitation_daily", "max_precipitation_daily", "std_precipitation_daily", "total_precipitation_daily",
@@ -30,7 +31,7 @@ def find_subevent_descriptions(data_folder, global_folder):
                        "proportion_event_graded_label", "proportion_extent_versus_trace_label", "evaluation_label_quality", "proportion_perm_water",
                        "mean_soil_bulk_density", "mean_surface_soil_moisture_one_day", "mean_root_soil_moisture_one_day", "mean_surface_soil_moisture_one_week", 
                        "mean_root_soil_moisture_one_week", "mode_soil_class", "month", "year", "lvl4_basin_area", "lvl5_basin_area", "aoi_area", 
-                       "proportion_urban", "continent", "country", "latitude", "longitude", "flood_cause"]
+                       "proportion_urban", "continent", "country", "latitude", "longitude", "flood_cause", "num_patches"]
     subevent_descriptions = {characteristic : [] for characteristic in characteristics}
 
     for index in tqdm(range(len(raster_extents))):
@@ -123,6 +124,9 @@ def find_subevent_descriptions(data_folder, global_folder):
         # evaluation of label quality 
         subevent_descriptions["evaluation_label_quality"].append(events[events["Code"]==event]["Label"].item())
 
+        # number of 256x256 data patches
+        subevent_descriptions["number_of_patches"].append(num_patches[subevent])
+
         ######## Permanent water
 
         perm_water = tf.imread(f"{data_folder}/full_subevent/raster_permanent_water/{subevent}.tif")
@@ -167,8 +171,8 @@ def find_subevent_descriptions(data_folder, global_folder):
             subevent_descriptions["continent"].append(continent_name)
 
         # date
-        subevent_descriptions["month"].append(raster_extents.loc[0, "date"].month)
-        subevent_descriptions["year"].append(raster_extents.loc[0, "date"].year)
+        subevent_descriptions["month"].append(raster_extents.loc[index, "date"].month)
+        subevent_descriptions["year"].append(raster_extents.loc[index, "date"].year)
 
         # level 4 and 5 basin areas
         for basin, basin_name in zip([lvl4_basin, lvl5_basin], ["lvl4_basin_area", "lvl5_basin_area"]):
