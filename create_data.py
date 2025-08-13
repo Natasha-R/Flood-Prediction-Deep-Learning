@@ -7,7 +7,7 @@ from data_processing.soil_moisture import download_soil_moisture_data, create_so
 from data_processing.soil_type import create_soil_type
 from data_processing.sentinel1 import find_sentinel1_availability, download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters
 from data_processing.precipitation import download_precipitation, create_precipitation_rasters
-from data_processing.local_patches import create_label_local_patches, create_features_local_patches
+from data_processing.local_patches import create_label_local_patches, create_features_local_patches, find_wider_scale_bounds
 import os
 import argparse
 
@@ -16,10 +16,10 @@ import argparse
 # 2. Download the FABDEM data from https://data.bris.ac.uk/data/dataset/s5hqmjcdj8yo2ibzi9b4ew3sn and extract all the image files. Place in "global_folder"/global_fabdem.
 # 3. Download the seas and waters polygons from https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip and extract the shapefiles. Place in "global_folder"/global_seas_polygons.
 # 4. Download the global soil classes and global soil bulk density data from https://soilgrids.org/. Place the files in "global_folder".
+# 5. Download global ESA worldcover.
+# 6. Download global basins.
 
 def main(data_folder, global_folder):
-
-    ########## Downloading and processing the labels and input features
 
     # Process the CEMS data
     print("Processing the labels...")
@@ -30,8 +30,14 @@ def main(data_folder, global_folder):
     create_aoi_metadata(data_folder)
     create_raster_metadata(data_folder)
 
+    # Create local 256x256 patches of the labels and 
+    # find the bounds of the wider context and basin scales
+    print("Creating local patches from the labels...")
+    create_label_local_patches(data_folder)
+    find_wider_scale_bounds(data_folder, global_folder)
+
     # Create the permanent water rasters and modify the CEMS rasters to create the final labels
-    # download_global_permanent_water(data_folder, global_folder) ## only needs to be run once
+    # download_global_permanent_water(data_folder, global_folder)
     create_permanent_water_rasters(data_folder, global_folder)
     combine_cems_and_permanent_water(data_folder)
     
@@ -65,11 +71,8 @@ def main(data_folder, global_folder):
     create_sentinel1_aoi_date_difference(data_folder) 
     create_sentinel1_rasters(data_folder)
 
-    ########## Creating the local patch dataset
-
-    # Create local 256x256 patches from the labels and features
-    print("Creating local patches from the labels and features...")
-    create_label_local_patches(data_folder)
+    # Create local 256x256 patches of the features
+    print("Creating local patches of the features...")
     create_features_local_patches(data_folder)
 
 if __name__ == "__main__":
