@@ -107,7 +107,7 @@ def create_dem_scales(data_folder, global_folder, scale):
 
     # define the metadata and the folder locations
     fabdem = gpd.read_file(f"{global_folder}/global_fabdem/FABDEM_v1-2_tiles.geojson").to_crs(epsg=4326)
-    scales = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    scales = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
     scales["geometry"] = scales[f"{scale}_geometry"].apply(shapely.wkt.loads)
     dem_folder = f"{data_folder}/{scale}/dem"
     if not os.path.isdir(dem_folder):

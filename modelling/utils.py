@@ -4,7 +4,7 @@ import os
 import yaml
 import torch.nn as nn
 import sys
-import architectures
+import modelling.architectures as architectures
 
 def get_logger():
 

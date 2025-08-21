@@ -69,7 +69,7 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
             permanent_water_raster_folder = f"{data_folder}/full_subevent/raster_permanent_water"
         else: # if scale == "context" or scale == "basin"
-            raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+            raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
             raster_extents["geometry"] = raster_extents[f"{scale_name}_geometry"].apply(shapely.wkt.loads)
             permanent_water_raster_folder = f"{data_folder}/{scale_name}/permanent_water"
         global_grid = gpd.read_file(f"{global_folder}/global_permanent_water/global_grid_1x1_reduced.geojson")

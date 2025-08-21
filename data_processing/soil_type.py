@@ -19,7 +19,7 @@ def create_soil_type(data_folder, global_folder, scale):
         soil_class_folder = f"{data_folder}/full_subevent/raster_soil_class"
         soil_bulk_density_folder = f"{data_folder}/full_subevent/raster_soil_bulk_density"
     else: # if scale == "context" or scale == "basin"
-        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         soil_class_folder = f"{data_folder}/{scale}/soil_class"
         soil_bulk_density_folder = f"{data_folder}/{scale}/soil_bulk_density"

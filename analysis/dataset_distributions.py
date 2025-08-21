@@ -11,11 +11,10 @@ def calculate_dataset_distributions(data_folder):
     Calculate the distributions of each of the features.
     """
 
-    features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "soil_class", "label", 
+    features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "soil_class", "label", "flow_accumulation",
                                                                                    "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1"],
-                                                                                   [1, 1, 1, 1, 1, 2, 2, 12, 3]) for band_index in range(feature_count)]
+                                                                                   [1, 1, 1, 1, 1, 1, 2, 2, 12, 3]) for band_index in range(feature_count)]
     features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
-
     for feature, band in tqdm(features):
         paths = [path.path for path in os.scandir(f"{data_folder}/full_subevent/raster_{feature}/") if path.path.endswith(".tif")]
         feature_value_counts = []

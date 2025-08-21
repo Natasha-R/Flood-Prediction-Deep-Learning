@@ -92,7 +92,7 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
         precipitation_folder = f"{data_folder}/full_subevent/raster_precipitation"
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     else: # if scale == "context" or scale == "basin"
-        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         precipitation_folder = f"{data_folder}/{scale}/precipitation"
     global_precipitation_folder = f"{global_folder}/global_precipitation"

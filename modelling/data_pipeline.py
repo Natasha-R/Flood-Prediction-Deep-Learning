@@ -87,8 +87,8 @@ class Normalize(object):
 
           # define the number of bands contained within each feature
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
-                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", "sentinel1"], 
-                                      [1, 1, 2, 2, 10, 16, 3])}
+                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", "sentinel1", "flow_accumulation"], 
+                                      [1, 1, 2, 2, 10, 16, 3, 1])}
           
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           def nested_defaultdict():
@@ -136,8 +136,8 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
 
      # define the features to normalize
      features = [(feature_name, band_index) for feature_name, feature_count in 
-                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1"], 
-                     [1, 1, 2, 2, 12, 3]) 
+                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation"], 
+                     [1, 1, 2, 2, 12, 3, 1]) 
                  for band_index in range(feature_count)]
      features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
 

@@ -220,7 +220,7 @@ def create_label_scales(data_folder, scale):
     """
 
     # define the metadata and folder locations
-    scales = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    scales = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
     scales["geometry"] = scales[f"{scale}_geometry"].apply(shapely.wkt.loads)
     save_folder = f"{data_folder}/{scale}/label"
     if not os.path.isdir(save_folder):

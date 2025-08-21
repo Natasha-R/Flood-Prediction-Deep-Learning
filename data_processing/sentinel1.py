@@ -324,7 +324,7 @@ def create_sentinel1_rasters(data_folder):
 def create_sentinel1_scale_rasters(data_folder, scale):
             
     # import metadata
-    raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
     raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
     aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
     save_folder = f"{data_folder}/{scale}/sentinel1"
