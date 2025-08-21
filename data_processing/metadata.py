@@ -5,7 +5,12 @@ from tqdm import tqdm
 import argparse
 from shapely.ops import unary_union
 import rasterio
+import shapely
 from shapely.geometry import box
+import warnings
+import sentinelhub
+pd.options.mode.chained_assignment = None
+warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS", category=UserWarning)
 
 def create_aoi_metadata(data_folder):
     """
@@ -158,6 +163,97 @@ def determine_data_split(data_folder):
     subset.loc[subset["patch"].isin(patches_val_patches), "subset"] = "val_patches"
     subset.to_csv(f"{data_folder}/metadata/data_subset.csv", index=False)
 
+def find_wider_scale_bounds(data_folder, global_folder):
+    """
+    Find the boundaries of the wider scales (context and basin) from the local patch bounds.
+    The "context" scale corresponds to the level 12 basin, and the "basin" scale corresponds to the level 6 basin.
+    """
+    # import in the polygons for the basins at level 6 and 12
+    lvl6_basin = gpd.read_file(f"{global_folder}/global_basins/lev06_basin.geojson")
+    lvl12_basin = gpd.read_file(f"{global_folder}/global_basins/lev12_basin.geojson")
+
+    # import the metadata
+    all_patches = os.listdir(f"{data_folder}/local/label")
+    all_patches.sort()
+    scales = {"patch":[], "basin_geometry":[], "context_geometry":[], "patch_geometry":[]}
+
+    for patch in tqdm(all_patches):
+
+        # find the boundaries and the centre of each local 256x256 patch
+        with rasterio.open(f"{data_folder}/local/label/" + patch) as file:
+            patch_bounds = box(*(file.bounds))
+            centre_x, centre_y = shapely.get_coordinates(patch_bounds.centroid)[0]
+
+        for basin_name, basin in zip(["basin_geometry", "context_geometry"], [lvl6_basin, lvl12_basin]):
+
+            # find the basin that intersects most with the patch
+            intersecting_basins = basin[basin.geometry.intersects(patch_bounds)]
+            intersecting_basins["geometry"] = shapely.make_valid(intersecting_basins["geometry"])
+            intersecting_basins["intersection_area"] = intersecting_basins.geometry.intersection(patch_bounds).area
+            intersecting_basins = intersecting_basins.sort_values("intersection_area", ascending=False)
+
+            # if no basins intersect, then take the nearest basin instead
+            if len(intersecting_basins) == 0:
+                basin["distance"] = basin.geometry.distance(patch_bounds)
+                intersecting_basins = basin.sort_values("distance", ascending=True).head(1)
+                
+            # determine a box that encapsulates the basin and has the patch in the centre
+            minx, miny, maxx, maxy = intersecting_basins.reset_index(drop=True).bounds.iloc[0]
+            box_half_size = max(max(abs(maxx - centre_x), abs(centre_x - minx)), max(abs(maxy - centre_y), abs(centre_y - miny)))
+            basin_box = box(centre_x - box_half_size, centre_y - box_half_size, centre_x + box_half_size, centre_y + box_half_size)
+            scales[basin_name].append(basin_box)
+
+        scales["patch_geometry"].append(patch_bounds)
+        scales["patch"].append(patch)
+
+        # process the scale boundaries
+        scales_gdf = gpd.GeoDataFrame(scales)
+        scales_gdf["date"] = pd.to_datetime(scales_gdf["patch"].str.split("_").str[1])
+        scales_gdf["height"] = 256
+        scales_gdf["width"] = 256
+        scales_gdf["subevent"] = scales_gdf["patch"].apply(lambda row: "_".join(row.split("_")[:2]))
+        aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson").drop_duplicates(["event", "subevent", "event_date"]).reset_index(drop=True)[["subevent", "event_date"]]
+        scales_gdf = scales_gdf.merge(aois, how="left", on="subevent").reset_index(drop=True)
+        aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+        for index in tqdm(range(len(scales_gdf))):
+            subevent_aois = aois[aois["subevent"]==scales_gdf.loc[index, "subevent"]]
+            intersecting = subevent_aois[subevent_aois.geometry.intersects(scales_gdf.loc[index, "patch_geometry"])]
+            if len(intersecting) == 0:
+                subevent_aois["distance"] = subevent_aois.geometry.distance(scales_gdf.loc[index, "patch_geometry"])
+                intersecting = subevent_aois.sort_values("distance", ascending=True)
+            scales_gdf.loc[index, "geometry_event_date_id"] = intersecting.head(1)["geometry_event_date_id"].item()
+            scales_gdf.loc[index, "context_resolution"] = min(sentinelhub.geo_utils.bbox_to_resolution(sentinelhub.BBox(scales_gdf.loc[index, "context_geometry"].bounds, crs="4326"), 256, 256, meters=True))
+            scales_gdf.loc[index, "basin_resolution"] = min(sentinelhub.geo_utils.bbox_to_resolution(sentinelhub.BBox(scales_gdf.loc[index, "basin_geometry"].bounds, crs="4326"), 256, 256, meters=True))
+            scales_gdf.loc[index, "geometry_event_date_id"] = intersecting.head(1)["geometry_event_date_id"].item()
+        scales_gdf["geometry_event_date_id"] = scales_gdf["geometry_event_date_id"].astype("int")
+
+        # save the boundaries as a geojson file
+        scales_gdf.to_file(f"{data_folder}/metadata/scales.geojson")
+
+    # find the area spanned by the context and basin geometries for each aoi
+    ids, id_context_resolutions, id_basin_resolutions, context_union, basin_union = [], [], [], [], []
+    for group_name, group_data in scales_gdf.groupby("geometry_event_date_id"):
+        ids.append(group_name)
+        id_context_resolutions.append(max(10, min(group_data["context_resolution"])))
+        id_basin_resolutions.append(max(10, min(group_data["basin_resolution"])))
+        context_union.append(unary_union(group_data["context_geometry"]))
+        basin_union.append(unary_union(group_data["basin_geometry"]))
+    id_gdf = gpd.GeoDataFrame({"geometry_event_date_id":ids, "context_resolution":id_context_resolutions, "basin_resolution":id_basin_resolutions, 
+                    "context_geometry": context_union, "basin_geometry": basin_union})
+    for geometry in ["context_geometry", "basin_geometry"]:
+        multi = id_gdf[geometry].astype(str).str.contains("MULTI")
+        id_gdf.loc[multi, geometry] = id_gdf.loc[multi, geometry].apply(lambda row : unary_union(row).convex_hull)
+    id_gdf = id_gdf.merge(scales_gdf[["geometry_event_date_id", "date"]].drop_duplicates(), on="geometry_event_date_id", how="left")
+
+    # save the aoi boundaries as a geojson file
+    gpd.GeoDataFrame(id_gdf).to_file(f"{data_folder}/metadata/scales_aois.geojson")
+
+    # create the folders for the context and basin patches
+    if not os.path.isdir(f"{data_folder}/context"):
+        os.mkdir(f"{data_folder}/context/")
+    if not os.path.isdir(f"{data_folder}/basin"):
+        os.mkdir(f"{data_folder}/basin/")
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create GeoJSON files representing the extent of the CEMS AOIs and rasters")
@@ -165,6 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--create_aoi_metadata", action="store_true", default=False, help="Create metadata describing the AOIs.")
     parser.add_argument("--create_raster_metadata", action="store_true", default=False, help="Create metadata describing the rasters.")
     parser.add_argument("--determine_data_split", action="store_true", default=False, help="Create metadata describing the split of the dataset into train, validation and test subsets.")
+    parser.add_argument("--find_wider_scale_bounds", action="store_true", default=False, help="Find the boundaries of the wider scales from the local patch bounds.")
     
     args = parser.parse_args()
 
@@ -176,3 +273,6 @@ if __name__ == "__main__":
 
     if args.determine_data_split:
         determine_data_split(args.data_folder)
+
+    if args.find_wider_scale_bounds:
+        find_wider_scale_bounds(args.data_folder, args.global_folder)

@@ -10,6 +10,7 @@ import numpy as np
 import time
 import argparse
 import datetime
+import shapely
 from tqdm import tqdm
 
 def download_precipitation(data_folder, global_folder):
@@ -81,17 +82,22 @@ def download_precipitation(data_folder, global_folder):
         os.remove(file_path)
         time.sleep(10)
 
-def create_precipitation_rasters(data_folder, global_folder):
+def create_precipitation_rasters(data_folder, global_folder, scale):
     """
     From the downloaded global precipitation data, create precipitation rasters corresponding to the CEMS label rasters.
     """
 
     # set up and import metadata
-    precipitation_folder = f"{data_folder}/full_subevent/raster_precipitation"
+    if scale == "local":
+        precipitation_folder = f"{data_folder}/full_subevent/raster_precipitation"
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+    else: # if scale == "context" or scale == "basin"
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+        raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        precipitation_folder = f"{data_folder}/{scale}/precipitation"
+    global_precipitation_folder = f"{global_folder}/global_precipitation"
     if not os.path.isdir(precipitation_folder):
         os.mkdir(precipitation_folder)
-    global_precipitation_folder = f"{global_folder}/global_precipitation"
-    raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     
     for index in tqdm(range(len(raster_extents))):
 
@@ -101,8 +107,13 @@ def create_precipitation_rasters(data_folder, global_folder):
         height = int(raster_extents["height"].iloc[index])
         width = int(raster_extents["width"].iloc[index])
         subevent = raster_extents["subevent"][index]
-        file_name = f"{precipitation_folder}/{subevent}.tif"
         num_of_bands = 16
+
+        if scale == "local":
+            file_name = f"{precipitation_folder}/{subevent}.tif"
+        else: # if scale == "context" or scale == "basin"
+            patch = raster_extents["patch"].iloc[index]
+            file_name = f"{precipitation_folder}/{patch}"
 
         if os.path.isfile(file_name):
             continue
@@ -125,7 +136,7 @@ def create_precipitation_rasters(data_folder, global_folder):
         meta.update({"count": num_of_bands})
         meta.pop("nodata", None)
 
-        # create a geotiff with all of the precipitation bands (days)
+        # create a geotiff with all of the (global) precipitation bands (days)
         with rasterio.open(file_name, "w", **meta, compress="LZW") as file:
             for index in range(14):
                 file.write(days_1_14[index].read(1), index+1)
@@ -146,8 +157,9 @@ def create_precipitation_rasters(data_folder, global_folder):
             precipitation_layers = [precipitation_file.read(index+1) for index in range(num_of_bands)]
             meta = precipitation_file.meta.copy()
 
-        # remove the data where there is no AOI
-        precipitation_layers = [np.where(reference_label == 0, 0, precipitation_layer) for precipitation_layer in precipitation_layers]
+        if scale == "local":
+            # remove the data where there is no AOI
+            precipitation_layers = [np.where(reference_label == 0, 0, precipitation_layer) for precipitation_layer in precipitation_layers]
 
         # scale the precipitation data by 10 and convert to uint16
         precipitation_layers = [precipitation_layer*10 for precipitation_layer in precipitation_layers]
@@ -177,6 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_precipitation", action="store_true", default=False, help="Download the global precipitation data.")
     parser.add_argument("--create_precipitation_rasters", action="store_true", default=False, help="Create raster files of the precipitation data, matching to the CEMS labels.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
 
     args = parser.parse_args()
 
@@ -184,4 +197,4 @@ if __name__ == "__main__":
         download_precipitation(args.data_folder, args.global_folder)
 
     if args.create_precipitation_rasters:
-        create_precipitation_rasters(args.data_folder, args.global_folder)
+        create_precipitation_rasters(args.data_folder, args.global_folder, args.scale)

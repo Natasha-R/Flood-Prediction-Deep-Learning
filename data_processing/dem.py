@@ -8,6 +8,7 @@ import argparse
 from osgeo import gdal
 import shutil
 import numpy as np
+import shapely
 from rasterio.enums import Resampling
 gdal.UseExceptions()
 
@@ -99,6 +100,59 @@ def create_dem_rasters(data_folder):
     # remove the intermediary files
     shutil.rmtree(dem_aoi_folder)
 
+def create_dem_scales(data_folder, global_folder, scale):
+    """
+    Create patches of the DEM data at the context and basin scales.
+    """
+
+    # define the metadata and the folder locations
+    fabdem = gpd.read_file(f"{global_folder}/global_fabdem/FABDEM_v1-2_tiles.geojson").to_crs(epsg=4326)
+    scales = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    scales["geometry"] = scales[f"{scale}_geometry"].apply(shapely.wkt.loads)
+    dem_folder = f"{data_folder}/{scale}/dem"
+    if not os.path.isdir(dem_folder):
+        os.mkdir(dem_folder)
+
+    for index in tqdm(range(len(scales))):
+
+        # import the metadata for the patch
+        height = int(scales["height"].iloc[index])
+        width = int(scales["width"].iloc[index])
+        geometry = scales["geometry"].iloc[index]
+        bounds = scales["geometry"][index].bounds
+        patch_name = scales["patch"].iloc[index]
+
+        # extract all of the DEM tiles that intersect with the patch geometry
+        tiles = list(fabdem[fabdem.intersects(geometry)]["file_name"])
+        tiles = [f"{global_folder}/global_fabdem/{tile[0]}{tile[2:]}" for tile in tiles]
+        for idx, tile in enumerate(tiles):
+            with rasterio.open(tile) as file:
+                out_image, out_transform = mask(file, [geometry], crop=True)
+                out_meta = file.meta.copy()
+                out_meta.update({"driver": "GTiff", "dtype": "int16", "transform": out_transform,
+                                 "height": out_image.shape[1], "width": out_image.shape[2]})
+                out_meta.pop("nodata", None)
+                out_image = np.where(out_image == -9999, 0, out_image)
+                out_image = np.round(out_image).astype(np.int16)
+                with rasterio.open(f"{dem_folder}/temp_{idx}.tif", "w", **out_meta) as file:
+                    file.write(out_image)
+                    file.nodata = None
+
+        # combine all of the individual DEM tiles
+        temp_tiles_paths = [f"{dem_folder}/temp_{idx}.tif" for idx in range(len(tiles))]
+        gdal.Warp(f"{dem_folder}/{patch_name}", temp_tiles_paths, 
+                  srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"],
+                  resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
+        with rasterio.open(f"{dem_folder}/{patch_name}") as file:
+            raster = file.read(1)
+            meta = file.meta.copy()
+        with rasterio.open(f"{dem_folder}/{patch_name}", "w", **meta, compress="LZW") as file:
+            file.write(raster, 1)
+            file.set_band_description(1, "DEM")
+        
+        for path in temp_tiles_paths:
+            os.remove(path)
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create DEM files clipped to the extent of the AOIs, and save in rasters matching to the CEMS labels.")
@@ -106,6 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
     parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
+    parser.add_argument("--create_dem_scales", action="store_true", default=False, help="Create patches of the DEM data at the context and basin scales.")
+    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: context or basin.")
 
     args = parser.parse_args()
 
@@ -114,3 +170,6 @@ if __name__ == "__main__":
 
     if args.create_dem_rasters:
         create_dem_rasters(data_folder=args.data_folder)
+
+    if args.create_dem_scales:
+        create_dem_scales(args.data_folder, args.global_folder, args.scale)

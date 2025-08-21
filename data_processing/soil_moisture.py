@@ -9,6 +9,7 @@ from rasterio.enums import Resampling
 import time
 import pandas as pd
 import argparse
+import shapely
 gdal.UseExceptions()
 
 def download_soil_moisture_data(data_folder, global_folder):
@@ -57,20 +58,26 @@ def download_soil_moisture_data(data_folder, global_folder):
         os.remove(file_path)
         time.sleep(10)
 
-def create_soil_moisture_rasters(data_folder, global_folder):
+def create_soil_moisture_rasters(data_folder, global_folder, scale):
     """
     From the downloaded global soil moisture data, create precipitation rasters corresponding to the CEMS label rasters.
     """
 
     # import the metadata
-    raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
-    raster_extents["one_day"] = raster_extents["date"] - pd.Timedelta(days=1)
-    raster_extents["one_week"] = raster_extents["date"] - pd.Timedelta(days=7)
-    soil_moisture_folders = [f"{data_folder}/full_subevent/raster_soil_moisture_one_day/",
-                             f"{data_folder}/full_subevent/raster_soil_moisture_one_week/"]
+    if scale == "local":
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+        soil_moisture_folders = [f"{data_folder}/full_subevent/raster_soil_moisture_one_day/",
+                                f"{data_folder}/full_subevent/raster_soil_moisture_one_week/"]
+    else: # if scale == "context" or scale == "basin"
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
+        raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        soil_moisture_folders = [f"{data_folder}/{scale}/soil_moisture_one_day/",
+                                 f"{data_folder}/{scale}/soil_moisture_one_week/"]
     for soil_moisture_folder in soil_moisture_folders:
         if not os.path.isdir(soil_moisture_folder):
             os.mkdir(soil_moisture_folder)
+    raster_extents["one_day"] = raster_extents["date"] - pd.Timedelta(days=1)
+    raster_extents["one_week"] = raster_extents["date"] - pd.Timedelta(days=7)
 
     for index in tqdm(range(len(raster_extents))):
 
@@ -83,35 +90,40 @@ def create_soil_moisture_rasters(data_folder, global_folder):
             height = int(raster_extents["height"].iloc[index])
             width = int(raster_extents["width"].iloc[index])
             subevent = raster_extents["subevent"][index]
-            folder_path = f"{data_folder}/full_subevent/raster_soil_moisture_{time_frame}/"
-
-            # import the label raster to match the soil moisture raster to
-            with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
-                reference_label = reference_file.read(1)
+            
+            if scale == "local":
+                # import the label raster to match the soil moisture raster to
+                with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
+                    reference_label = reference_file.read(1)
+                save_path = f"{data_folder}/full_subevent/raster_soil_moisture_{time_frame}/{subevent}"
+            else:  # if scale == "context" or scale == "basin"
+                patch_name = raster_extents["patch"].iloc[index][:-4]
+                save_path = f"{data_folder}/{scale}/soil_moisture_{time_frame}/{patch_name}"
 
             # extract the surface and rootzone soil moisture layers
             soil_moistures = []
             for layer in ["sm_surface", "sm_rootzone"]:
                 
                 # extract only the raster area from the corresponding global GeoTIFF and convert to WGS84
-                gdal.Warp(f"{folder_path}/{subevent}_{layer}.tif", f"{global_folder}/global_soil_moisture/{date}_{layer}_global.tif", 
+                gdal.Warp(f"{save_path}_{layer}.tif", f"{global_folder}/global_soil_moisture/{date}_{layer}_global.tif", 
                             srcSRS="EPSG:6933", dstSRS="EPSG:4326", format='GTiff',
                             resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
 
                 # import the soil moisture raster data and metadata
-                with rasterio.open(f"{folder_path}/{subevent}_{layer}.tif") as soil_moisture_file:
-                    soil_moisture_raster = soil_moisture_file.read(1)
+                with rasterio.open(f"{save_path}_{layer}.tif") as soil_moisture_file:
+                    soil_moisture = soil_moisture_file.read(1)
                     meta = soil_moisture_file.meta.copy()
 
                 # keep only soil moisture data within the AOI bounds, and scale data by 10,000 to store as uint16
-                soil_moisture = np.where(reference_label == 0, 0, soil_moisture_raster)
+                if scale == "local":
+                    soil_moisture = np.where(reference_label == 0, 0, soil_moisture)
                 soil_moisture = np.where(soil_moisture == -9999, 0, soil_moisture)
                 soil_moisture = soil_moisture*10000
                 soil_moisture = np.round(soil_moisture).astype(np.uint16)
                 soil_moistures.append(soil_moisture)
 
                 # remove the intermediary files
-                os.remove(f"{folder_path}/{subevent}_{layer}.tif")
+                os.remove(f"{save_path}_{layer}.tif")
             
             # save the two soil moisture bands to a GeoTIFF
             meta.update({"driver": "GTiff",
@@ -119,14 +131,14 @@ def create_soil_moisture_rasters(data_folder, global_folder):
                         "resampling": Resampling.bilinear,
                         "count": 2})
             meta.pop("nodata", None)
-            with rasterio.open(f"{folder_path}/{subevent}.tif", "w", **meta, compress="LZW") as file:
+            with rasterio.open(f"{save_path}.tif", "w", **meta, compress="LZW") as file:
                 file.write(soil_moistures[0], 1)
                 file.set_band_description(1, "soil_moisture_surface")
                 file.write(soil_moistures[1], 2)
                 file.set_band_description(2, "soil_moisture_rootzone")
                 file.nodata = None
 
-            os.remove(f"{folder_path}/{subevent}.tif.aux.xml")
+            os.remove(f"{save_path}.tif.aux.xml")
 
 if __name__ == "__main__":
 
@@ -135,6 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_soil_moisture_data", action="store_true", default=False, help="Download the global soil moisture data.")
     parser.add_argument("--create_soil_moisture_rasters", action="store_true", default=False, help="Create raster files of the soil moisture data, matching to the CEMS labels.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
 
     args = parser.parse_args()
 
@@ -142,4 +155,4 @@ if __name__ == "__main__":
         download_soil_moisture_data(args.data_folder, args.global_folder)
 
     if args.create_soil_moisture_rasters:
-        create_soil_moisture_rasters(args.data_folder, args.global_folder)
+        create_soil_moisture_rasters(args.data_folder, args.global_folder, args.scale)

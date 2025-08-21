@@ -13,7 +13,6 @@ import shapely
 from shapely.geometry import box
 gdal.UseExceptions()
 pd.options.mode.chained_assignment = None
-warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS", category=UserWarning)
 
 def create_label_local_patches(data_folder):
     """
@@ -90,8 +89,8 @@ def create_features_local_patches(data_folder):
     # import the metadata
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = json.load(open(f"{data_folder}/metadata/subevent_patches.json"))
-    features = ["precipitation", "dem", "permanent_water", "sentinel1", "sentinel2", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
-    resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", 
+    features = ["precipitation", "dem", "permanent_water", "sentinel1", "sentinel2", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density", "flow_accumulation"]
+    resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", "flow_accumulation": "bilinear",
                     "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear",
                     "soil_class": "nearest", "permanent_water": "nearest"}
     for feature in features:
@@ -141,53 +140,6 @@ def create_features_local_patches(data_folder):
 
             os.remove(f"{data_folder}/local/{feature}/{subevent}_padded.tif")
 
-def find_wider_scale_bounds(data_folder, global_folder):
-    """
-    Find the boundaries of the wider scales (context and basin) from the local patch bounds.
-    The "context" scale corresponds to the level 12 basin, and the "basin" scale corresponds to the level 6 basin.
-    """
-    # import in the polygons for the basins at level 6 and 12
-    lvl6_basin = gpd.read_file(f"{global_folder}/global_basins/lev06_basin.geojson")
-    lvl12_basin = gpd.read_file(f"{global_folder}/global_basins/lev12_basin.geojson")
-
-    # import the metadata
-    all_patches = os.listdir(f"{data_folder}/local/label")
-    all_patches.sort()
-    scales = {"patch":[], "basin_geometry":[], "context_geometry":[], "patch_geometry":[]}
-
-    for patch in tqdm(all_patches):
-
-        # find the boundaries and the centre of each local 256x256 patch
-        with rasterio.open(f"{data_folder}/local/label/" + patch) as file:
-            patch_bounds = box(*(file.bounds))
-            centre_x, centre_y = shapely.get_coordinates(patch_bounds.centroid)[0]
-
-        for basin_name, basin in zip(["basin_geometry", "context_geometry"], [lvl6_basin, lvl12_basin]):
-
-            # find the basin that intersects most with the patch
-            intersecting_basins = basin[basin.geometry.intersects(patch_bounds)]
-            intersecting_basins["geometry"] = shapely.make_valid(intersecting_basins["geometry"])
-            intersecting_basins["intersection_area"] = intersecting_basins.geometry.intersection(patch_bounds).area
-            intersecting_basins = intersecting_basins.sort_values("intersection_area", ascending=False)
-
-            # if no basins intersect, then take the nearest basin instead
-            if len(intersecting_basins) == 0:
-                basin["distance"] = basin.geometry.distance(patch_bounds)
-                intersecting_basins = basin.sort_values("distance", ascending=True).head(1)
-                
-            # determine a box that encapsulates the basin and has the patch in the centre
-            minx, miny, maxx, maxy = intersecting_basins.reset_index(drop=True).bounds.iloc[0]
-            box_half_size = max(max(abs(maxx - centre_x), abs(centre_x - minx)), max(abs(maxy - centre_y), abs(centre_y - miny)))
-            basin_box = box(centre_x - box_half_size, centre_y - box_half_size, centre_x + box_half_size, centre_y + box_half_size)
-            scales[basin_name].append(basin_box)
-
-        scales["patch_geometry"].append(patch_bounds)
-        scales["patch"].append(patch)
-
-        # save the boundaries as a geojson file
-        scales_gdf = gpd.GeoDataFrame(scales)
-        scales_gdf.to_file(f"{data_folder}/metadata/scales.geojson")
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Divide the subevent rasters into 256x256 patches to form the local dataset.")
@@ -196,7 +148,6 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--create_label_local_patches", action="store_true", default=False, help="Divide the label rasters into 256x256 patches.")
     parser.add_argument("--create_features_local_patches", action="store_true", default=False, help="Divide all of the data input features into 256x256 patches, matching to the label patches.")
-    parser.add_argument("--find_wider_scale_bounds", action="store_true", default=False, help="Find the boundaries of the wider scales from the local patch bounds.")
 
     args = parser.parse_args()
 
@@ -205,6 +156,3 @@ if __name__ == "__main__":
     
     if args.create_features_local_patches:
         create_features_local_patches(args.data_folder)
-
-    if args.find_wider_scale_bounds:
-        find_wider_scale_bounds(args.data_folder, args.global_folder)

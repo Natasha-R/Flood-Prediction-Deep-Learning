@@ -5,21 +5,28 @@ import os
 import rasterio
 import numpy as np
 import argparse
+import shapely
 gdal.UseExceptions()
 
-def create_soil_type(data_folder, global_folder):
+def create_soil_type(data_folder, global_folder, scale):
     """
     Create rasters representing the soil classes and soil bulk density, corresponding to the CEMS label rasters.
     """
 
     # define the metadata and folder locations
-    raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+    if scale == "local":
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
+        soil_class_folder = f"{data_folder}/full_subevent/raster_soil_class"
+        soil_bulk_density_folder = f"{data_folder}/full_subevent/raster_soil_bulk_density"
+    else: # if scale == "context" or scale == "basin"
+        raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+        raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        soil_class_folder = f"{data_folder}/{scale}/soil_class"
+        soil_bulk_density_folder = f"{data_folder}/{scale}/soil_bulk_density"
     global_soil_classes_path = f"{global_folder}/global_soil_classes.tif"
     global_soil_bulk_density_path = f"{global_folder}/global_soil_bulk_density.tif"
-    soil_class_folder = f"{data_folder}/full_subevent/raster_soil_class"
     if not os.path.isdir(soil_class_folder):
         os.mkdir(soil_class_folder)
-    soil_bulk_density_folder = f"{data_folder}/full_subevent/raster_soil_bulk_density"
     if not os.path.isdir(soil_bulk_density_folder):
         os.mkdir(soil_bulk_density_folder)
 
@@ -40,7 +47,11 @@ def create_soil_type(data_folder, global_folder):
                                                           [global_soil_classes_path, global_soil_bulk_density_path],
                                                           [soil_class_folder, soil_bulk_density_folder]):
             
-            soil_type_raster_path = f"{raster_folder}/{subevent}.tif"
+            if scale == "local":
+                soil_type_raster_path = f"{raster_folder}/{subevent}.tif"
+            else:  # if scale == "context" or scale == "basin"
+                patch_name = raster_extents["patch"].iloc[index]
+                soil_type_raster_path = f"{raster_folder}/{patch_name}"
             
             if os.path.isfile(soil_type_raster_path):
                 continue
@@ -49,13 +60,19 @@ def create_soil_type(data_folder, global_folder):
             resample_alg = "bilinear" if layer_name=="bulk_density" else "nearest"
             # for the bulk density data, impute the missing values using gdal_fillnodata
             if layer_name == "bulk_density":
-                gdal.Warp(soil_type_raster_path, global_path, 
-                        srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff',
-                        resampleAlg=resample_alg, outputBounds=bounds)
-                os.system(f"gdal_fillnodata -md=0 -q {soil_type_raster_path} {soil_type_raster_path}")
-                gdal.Warp(soil_type_raster_path, soil_type_raster_path, 
+                if scale == "local":
+                    gdal.Warp(soil_type_raster_path, global_path, 
+                            srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff',
+                            resampleAlg=resample_alg, outputBounds=bounds)
+                else:
+                    gdal.Warp(soil_type_raster_path, global_path, 
                             srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff',
                             resampleAlg=resample_alg, width=width, height=height, outputBounds=bounds)
+                os.system(f"gdal_fillnodata -md=0 -q {soil_type_raster_path} {soil_type_raster_path}")
+                if scale == "local":
+                    gdal.Warp(soil_type_raster_path, soil_type_raster_path, 
+                                srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff',
+                                resampleAlg=resample_alg, width=width, height=height, outputBounds=bounds)
             else:
                 gdal.Warp(soil_type_raster_path, global_path, 
                         srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff',
@@ -70,7 +87,8 @@ def create_soil_type(data_folder, global_folder):
                 soil_type_raster = np.where(soil_type_raster == 255, 254, soil_type_raster)
                 soil_type_raster = soil_type_raster + 1
                 soil_type_raster = np.where(soil_type_raster == 255, 0, soil_type_raster)
-            soil_type_raster = np.where(reference_label == 0, 0, soil_type_raster)
+            if scale == "local":
+                soil_type_raster = np.where(reference_label == 0, 0, soil_type_raster)
 
             # save the final raster
             with rasterio.open(soil_type_raster_path, "w", **meta, compress="LZW") as file:
@@ -87,7 +105,8 @@ if __name__ == "__main__":
     
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
 
     args = parser.parse_args()
 
-    create_soil_type(args.data_folder, args.global_folder)
+    create_soil_type(args.data_folder, args.global_folder, args.scale)

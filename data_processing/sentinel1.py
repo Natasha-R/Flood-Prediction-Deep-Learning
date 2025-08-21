@@ -8,6 +8,7 @@ import os
 import rasterio
 import math
 import time
+import shapely
 import numpy as np
 from osgeo import gdal
 import argparse
@@ -24,7 +25,7 @@ def setup():
     config = SHConfig("cdse")
     return config
 
-def find_sentinel1_availability(data_folder):
+def find_sentinel1_availability(data_folder, scale):
     """
     Use the Sentinel Hub catalog to find the availability and associated metadata of the Sentinel 1 data.
     The created "date difference" data are saved in geojson files.
@@ -34,24 +35,29 @@ def find_sentinel1_availability(data_folder):
     catalog = SentinelHubCatalog(config=config)
 
     # import the metadata
-    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
-    aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
+    if scale == "local":
+        extents = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+        sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
+    else: # if scale == "context" or scale == "basin":
+        extents = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
+        extents["geometry"] = extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
 
-    sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
+    extents["one_week_previous"] = extents["event_date"] - pd.Timedelta(days=7)
+    extents["180_days_previous"] = extents["event_date"] - pd.Timedelta(days=180)
     if not os.path.isdir(sentinel1_geojson_folder):
         os.mkdir(sentinel1_geojson_folder)
 
-    for index in tqdm(range(len(aois))):
+    for index in tqdm(range(len(extents))):
 
-        subevent = aois.loc[index, "subevent"]
-        aoi_path = f"{sentinel1_geojson_folder}/{subevent}_aoi_{index}"
+        subevent = extents.loc[index, "subevent"]
+        save_path = f"{sentinel1_geojson_folder}/{subevent}_aoi_{index}"
 
         # downloading the Sentinel 1 data will use the "MOST_RECENT" parameter within a given date range, but the downloaded data does not include the associated date
         # therefore we search the catalog for the same aoi in the same timeframe, to access the metadata for the sentinel 1 data availability
         search_iterator = catalog.search(DataCollection.SENTINEL1_IW,
-                                        geometry=Geometry(aois.loc[index, "geometry"], CRS.WGS84),
-                                        time=(aois.loc[index, "180_days_previous"], aois.loc[index, "one_week_previous"]),
+                                        geometry=Geometry(extents.loc[index, "geometry"], CRS.WGS84),
+                                        time=(extents.loc[index, "180_days_previous"], extents.loc[index, "one_week_previous"]),
                                         fields={"include": ["id", "properties.datetime", "properties.s1:polarization", "geometry"], "exclude": []})
         results = pd.DataFrame([{"id": item["id"], 
                                 "datetime": item["properties"]["datetime"],
@@ -66,7 +72,7 @@ def find_sentinel1_availability(data_folder):
         results["orbit_number"] = results["id"].str.split("_").str[6]
 
         # find the date difference between the sentinel 1 capture date and the flood event date
-        results["days_difference"] = (aois.loc[index, "aoi_date"] - results["datetime"].dt.tz_localize(None)).dt.days
+        results["days_difference"] = (extents.loc[index, "aoi_date"] - results["datetime"].dt.tz_localize(None)).dt.days
         results = gpd.GeoDataFrame(results, geometry="geometry", crs="EPSG:4326")
 
         # the polygons corresponding to a sentinel 1 data granule are not exact, and sometimes leave gaps
@@ -79,9 +85,9 @@ def find_sentinel1_availability(data_folder):
         sentinel1_availability = gpd.GeoDataFrame(sentinel1_availability, crs="EPSG:4326")
         sentinel1_availability = sentinel1_availability.sort_values("days_differences", ascending=False, ignore_index=True)
 
-        sentinel1_availability.to_file(aoi_path + ".geojson")
+        sentinel1_availability.to_file(save_path + ".geojson")
 
-def download_sentinel1(data_folder):
+def download_sentinel1(data_folder, scale):
     """
     Download Sentinel 1 data for each of the AOIs.
     """
@@ -89,12 +95,17 @@ def download_sentinel1(data_folder):
     config = setup()
 
     # import the metadata and calculate the time frame for data collection
-    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    aois = aois.drop_duplicates(["geometry_event_date_id"])
+    if scale == "local":
+        aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+        sentinel1_folder = f"{data_folder}/full_subevent/sentinel_1/"
+        sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
+    else: # if scale == "context" or scale == "basin":
+        aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
+        aois["geometry"] = aois[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        sentinel1_folder = f"{data_folder}/{scale}/download_sentinel1/"
+        sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
     aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
-
-    sentinel1_folder = f"{data_folder}/full_subevent/sentinel_1"
     if not os.path.isdir(sentinel1_folder):
         os.mkdir(sentinel1_folder)
 
@@ -109,7 +120,8 @@ def download_sentinel1(data_folder):
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
             geometry = Geometry(aois.loc[index, "geometry"], CRS.WGS84)
-            geometry_size = bbox_to_dimensions(geometry.bbox, resolution=10)
+            resolution = 10 if scale == "local" else aois.loc[index, f"{scale}_resolution"].item()
+            geometry_size = bbox_to_dimensions(geometry.bbox, resolution=resolution)
             col_num  = math.ceil(geometry_size[0] / 2500)
             row_num = math.ceil(geometry_size[1] / 2500)
             geometry_correctly_sized = False
@@ -122,7 +134,7 @@ def download_sentinel1(data_folder):
                 col_increase = False
                 row_increase = False
                 for split_aoi in split_aois:
-                    split_aoi_size = bbox_to_dimensions(split_aoi, resolution=10)
+                    split_aoi_size = bbox_to_dimensions(split_aoi, resolution=resolution)
                     if split_aoi_size[0] > 2500:
                         col_increase = True
                     if split_aoi_size[1] > 2500:
@@ -136,10 +148,10 @@ def download_sentinel1(data_folder):
                     geometry_correctly_sized = True
 
             for bbox in tqdm(split_aois, leave=False):
-                bbox_size = bbox_to_dimensions(bbox, resolution=10)
+                bbox_size = bbox_to_dimensions(bbox, resolution=resolution)
 
                 # restrict the start of the data retrieval date interval to known Sentinel 1 data availability
-                availability = gpd.read_file(f"{data_folder}/full_subevent/geojson_sentinel1/{subevent}_aoi_{index}.geojson").sort_values("days_differences", ascending=True)
+                availability = gpd.read_file(f"{sentinel1_geojson_folder}/{subevent}_aoi_{index}.geojson").sort_values("days_differences", ascending=True)
                 availability["geometry"] = availability.geometry.apply(lambda row: make_valid(row, method="structure"))
                 claimed_area = GeometryCollection()
                 records = []
@@ -200,19 +212,26 @@ def download_sentinel1(data_folder):
 
                 time.sleep(0.5)
 
-def create_sentinel1_aoi_date_difference(data_folder):
+def create_sentinel1_aoi_date_difference(data_folder, scale):
     """
     Create rasters of the Sentinel 1 data for each individual AOI.
     Add a band to the raster representing the time difference between Sentinel 1 data capture and the subevent date.
     """
 
     # import the metadata
-    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+    if scale == "local":
+        aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+        sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
+        sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
+        sentinel1_download_folder = f"{data_folder}/full_subevent/sentinel1/"
+    else: # if scale == "context" or scale == "basin":
+        aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
+        aois["geometry"] = aois[f"{scale}_geometry"].apply(shapely.wkt.loads)
+        sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
+        sentinel1_raster_folder = f"{data_folder}/{scale}/sentinel1/"
+        sentinel1_download_folder = f"{data_folder}/{scale}/download_sentinel1/"
     aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
-
-    sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
-    sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
     if not os.path.isdir(sentinel1_raster_folder):
         os.mkdir(sentinel1_raster_folder)
 
@@ -224,7 +243,7 @@ def create_sentinel1_aoi_date_difference(data_folder):
         geojson_path = f"{sentinel1_geojson_folder}/{subevent}_aoi_{index}"
 
         # some of the larger AOIs needed to be split up in order to download them. Join them back together to form the full AOI
-        sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/full_subevent/sentinel_1/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
+        sub_aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(f"{sentinel1_download_folder}/aoi_{aoi_id}") for file in files if file.endswith(".tiff")]
         gdal.PushErrorHandler('CPLQuietErrorHandler')
         gdal.Warp(f"{aoi_path}.tif", sub_aoi_paths, srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', 
                   outputType=gdal.GDT_Int16, resampleAlg="bilinear")
@@ -256,7 +275,6 @@ def create_sentinel1_aoi_date_difference(data_folder):
             file.set_band_description(2, "VH")
             file.set_band_description(3, "date_difference")
 
-        time.sleep(0.5)
         os.remove(aoi_path + "_date_diff.tif")
 
 def create_sentinel1_rasters(data_folder):
@@ -303,26 +321,56 @@ def create_sentinel1_rasters(data_folder):
     for tiff in aoi_tiffs:
         os.remove(tiff)
 
+def create_sentinel1_scale_rasters(data_folder, scale):
+            
+    # import metadata
+    raster_extents = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+    save_folder = f"{data_folder}/{scale}/sentinel1"
+
+    for index in tqdm(range(len(raster_extents))):
+
+        bounds = raster_extents.loc[index, "geometry"].bounds
+        subevent = raster_extents["subevent"][index]
+        aoi_id = aois[(aois["geometry_event_date_id"] == raster_extents.loc[index, "geometry_event_date_id"]) & (aois["subevent"] == raster_extents.loc[index, "subevent"])].index[0]
+        aoi_path = f"{save_folder}/{subevent}_aoi_{aoi_id}.tif"
+        patch = raster_extents["patch"].iloc[index]
+        file_name = f"{save_folder}/{patch}"
+
+        gdal.Warp(file_name, aoi_path, format='GTiff', creationOptions=["COMPRESS=LZW"],
+            resampleAlg="bilinear", width=256, height=256, outputBounds=bounds)
+
+    # remove the separate aoi tiff files
+    # aoi_tiffs = [os.path.join(root, file) for root, dirs, files in os.walk(f"{sentinel1_raster_folder}") for file in files if "aoi" in file]
+    # for tiff in aoi_tiffs:
+    #     os.remove(tiff)
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download Sentinel 1 data and create rasters")
     
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
-    parser.add_argument("--find_sentinel1_availability", action="store_true", default=False, help="Create metadata describing the availability of Sentinel 2 data.")
+    parser.add_argument("--find_sentinel1_availability", action="store_true", default=False, help="Create metadata describing the availability of Sentinel 1 data.")
     parser.add_argument("--download_sentinel1", action="store_true", default=False, help="Download the Sentinel 1 data for each of the AOIs.")
     parser.add_argument("--create_sentinel1_aoi_date_difference", action="store_true", default=False, help="Create a raster for each AOI and add a date difference band to it.")
     parser.add_argument("--create_sentinel1_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data, matching to the CEMS labels.")
+    parser.add_argument("--create_sentinel1_scale_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data at the context and basin scales.")
+    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: local, context, or basin.")
 
     args = parser.parse_args()
 
     if args.find_sentinel1_availability:
-        find_sentinel1_availability(args.data_folder)
+        find_sentinel1_availability(args.data_folder, args.scale)
 
     if args.download_sentinel1:
-        download_sentinel1(args.data_folder)
+        download_sentinel1(args.data_folder, args.scale)
     
     if args.create_sentinel1_aoi_date_difference:
-        create_sentinel1_aoi_date_difference(args.data_folder)
+        create_sentinel1_aoi_date_difference(args.data_folder, args.scale)
     
     if args.create_sentinel1_rasters:
         create_sentinel1_rasters(args.data_folder)
+
+    if args.create_sentinel1_scale_rasters:
+        create_sentinel1_scale_rasters(args.data_folder, args.scale)

@@ -8,6 +8,7 @@ import argparse
 import pandas as pd
 import rasterio
 import numpy as np
+import shapely
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -213,14 +214,35 @@ def combine_cems_and_permanent_water(data_folder):
             file.write(label_raster, 1)
             file.nodata = None
 
+def create_label_scales(data_folder, scale):
+    """
+    Create patches of the labels at the context and basin scales.
+    """
+
+    # define the metadata and folder locations
+    scales = gpd.read_file(f"{data_folder}/metadata/scales_temp.geojson")
+    scales["geometry"] = scales[f"{scale}_geometry"].apply(shapely.wkt.loads)
+    save_folder = f"{data_folder}/{scale}/label"
+    if not os.path.isdir(save_folder):
+        os.mkdir(save_folder)
+
+    for index in tqdm(range(len(scales))):
+
+        # save the label as a raster at the given scale
+        gdal.Warp(f"{save_folder}/{scales['patch'].iloc[index]}", f"{data_folder}/full_subevent/raster_label/{scales['subevent'][index]}.tif",
+                  format="GTiff", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"],
+                  outputBounds=scales["geometry"].iloc[index].bounds, width=256, height=256, resampleAlg="nearest")
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate GeoJSON and raster files to represent the CEMS labels.")
 
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
-    parser.add_argument("--create_geojson", action="store_true", default=False, help="Create the GeoJSON files.")
-    parser.add_argument("--create_raster", action="store_true", default=False, help="Create the rasters from the GeoJSON files.")
+    parser.add_argument("--create_cems_geojson", action="store_true", default=False, help="Create the GeoJSON files.")
+    parser.add_argument("--create_cems_raster", action="store_true", default=False, help="Create the rasters from the GeoJSON files.")
     parser.add_argument("--combine_cems_and_permanent_water", default=False, help="Combine the permanent water and CEMS data to create the labels.")
+    parser.add_argument("--create_label_scales", action="store_true", default=False, help="Create patches of the labels at the context and basin scales.")
+    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: context or basin.")
 
     args = parser.parse_args()
 
@@ -232,3 +254,6 @@ if __name__ == "__main__":
 
     if args.combine_cems_and_permanent_water:
         combine_cems_and_permanent_water(args.data_folder)
+
+    if args.create_label_scales:
+        create_label_scales(args.data_folder, args.scale)
