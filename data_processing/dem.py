@@ -42,10 +42,8 @@ def extract_dem_aoi(data_folder, global_folder):
                                 "height": out_image.shape[1],
                                 "width": out_image.shape[2],
                                 "transform": out_transform})
-                out_meta.pop("nodata", None)
                 with rasterio.open(f"{dem_aoi_folder}/temp_{index}.tif", "w", **out_meta) as file:
                     file.write(out_image)
-                    file.nodata = None
 
         # combine all of the masked DEM images together to create one DEM representing the aoi polygon
         temp_tiles_paths = [f"{dem_aoi_folder}/temp_{index}.tif" for index in range(len(tiles))]
@@ -57,12 +55,14 @@ def extract_dem_aoi(data_folder, global_folder):
                             "width": merged_image.shape[2],
                             "transform": merged_transform,
                             "dtype": "int16",
+                            "nodata":0,
                             "resampling": Resampling.bilinear})
         merged_image = np.where(merged_image == -9999, 0, merged_image)
         merged_image = np.round(merged_image).astype(np.int16)
         with rasterio.open(f"{dem_aoi_folder}/dem_{aois.loc[idx, 'geometry_id']}.tif", "w", **merged_meta, compress="LZW") as file:
             file.write(merged_image)
             file.set_band_description(1, "DEM")
+            file.nodata = 0
         for file in temp_tiles:
             file.close()
         for path in temp_tiles_paths:
