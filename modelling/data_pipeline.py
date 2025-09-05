@@ -53,6 +53,8 @@ def create_data_loader(config, data_folder, subset=None, subevent=None, event=No
      Create a dataloader for a particular data subset, subevent or event.
      """
      dataset = FloodDataset(config=config, data_folder=data_folder, subset=subset, subevent=subevent, event=event)
+     if len(dataset) == 0:
+          return None
      loader = torch.utils.data.DataLoader(dataset,
                                           batch_size=config["batch_size"],
                                           num_workers=config["number_workers"],
@@ -88,13 +90,13 @@ class Normalize(object):
           # define the number of bands contained within each feature
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", "sentinel1", "flow_accumulation"], 
-                                      [1, 1, 2, 2, 10, 16, 3, 1])}
+                                      [1, 1, 2, 2, 12, 16, 3, 1])}
           
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           def nested_defaultdict():
                return defaultdict(nested_defaultdict)
           self.zscore_values = nested_defaultdict()
-          features_to_transform = [feature for feature in config["features"] if not feature in ["permanent_water", "soil_class"]]
+          features_to_transform = [feature for feature in config["features"] if not feature in ["permanent_water", "soil_class", "flow_direction"]]
           for feature in features_to_transform:
                self.zscore_values[feature]["shift"] = torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]])
                self.zscore_values[feature]["scale"] = torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])
@@ -102,7 +104,7 @@ class Normalize(object):
      def apply_normalization(self, feature_name, feature):
 
           # these features do not need to be scaled
-          if feature_name in ["permanent_water", "soil_class"]:
+          if feature_name in ["permanent_water", "soil_class", "flow_direction"]:
                return feature
           
           # apply log to features that need to be transformed

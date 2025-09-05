@@ -2,7 +2,7 @@ from data_processing.labels import create_cems_geojson, create_cems_raster, comb
 from data_processing.metadata import create_aoi_metadata, create_raster_metadata, find_wider_scale_bounds
 from data_processing.permanent_water import download_global_permanent_water, create_permanent_water_rasters
 from data_processing.dem import extract_dem_aoi, create_dem_rasters, create_dem_scales
-from data_processing.sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, create_sentinel2_rasters
+from data_processing.sentinel2 import find_sentinel2_availability, find_minimal_cloud_cover, download_sentinel2, set_sentinel2_nodata, create_sentinel2_rasters
 from data_processing.soil_moisture import download_soil_moisture_data, create_soil_moisture_rasters
 from data_processing.soil_type import create_soil_type
 from data_processing.sentinel1 import find_sentinel1_availability, download_sentinel1, create_sentinel1_aoi_date_difference, create_sentinel1_rasters, create_sentinel1_scale_rasters
@@ -10,6 +10,7 @@ from data_processing.precipitation import download_precipitation, create_precipi
 from data_processing.land_cover import create_land_cover_rasters
 from data_processing.local_patches import create_label_local_patches, create_features_local_patches
 from data_processing.flow_accumulation import create_flow_accumulation
+from data_processing.flow_direction import create_flow_direction
 import os
 import argparse
 
@@ -47,7 +48,7 @@ def main(data_folder, global_folder):
 
     # Create the permanent water rasters and modify the CEMS rasters to create the final labels
     # download_global_permanent_water(data_folder, global_folder)
-    create_permanent_water_rasters(data_folder, global_folder, ["local"], "context", "region")
+    create_permanent_water_rasters(data_folder, global_folder, ["local", "context", "basin"])
     combine_cems_and_permanent_water(data_folder)
     
     # Create the DEM rasters
@@ -75,17 +76,21 @@ def main(data_folder, global_folder):
     for scale in ["local", "context", "basin"]:
         create_land_cover_rasters(data_folder, global_folder, scale)
 
-    # Create the flow accumulation
-    print("Creating flow accumulation rasters...")
+    # Create the flow accumulation and flow direction rasters
+    print("Creating flow accumulation and direction rasters...")
     for scale in ["local", "context", "basin"]:
        create_flow_accumulation(data_folder, global_folder, scale)
+       create_flow_direction(data_folder, global_folder, scale)
 
     # Create the Sentinel 2 rasters
     print("Downloading and processing Sentinel 2 data...")
     find_sentinel2_availability(data_folder)
     find_minimal_cloud_cover(data_folder)
     download_sentinel2(data_folder)
-    create_sentinel2_rasters(data_folder)
+    for scale in ["context", "basin"]:
+        set_sentinel2_nodata(data_folder, scale)
+    for scale in ["local", "context", "basin"]:
+        create_sentinel2_rasters(data_folder, scale)
 
     # Create the Sentinel 1 rasters
     print("Downloading and processing Sentinel 1 data...")
