@@ -56,8 +56,8 @@ def load_model(config, device, logger, pretrained_path=None):
     # load the model architecture
     if config["architecture"].lower()=="test":
         model = architectures.TestModel(config, device)
-    elif config["architecture"].lower()=="basicunet":
-        model = architectures.BasicUNet(config, device)
+    elif config["architecture"].lower()=="localunet":
+        model = architectures.LocalUNet(config, device)
 
     # load in any pretrained model weights
     if pretrained_path:

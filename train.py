@@ -8,24 +8,26 @@ import time
 import os 
 import modelling.utils as utils
 import argparse
+import pandas as pd
 from visualise import plot_losses
 
 def train(config_path, data_folder, modelling_folder, device, logger):
 
     config, config_name = utils.load_config(config_path, logger)
     model = utils.load_model(config, device, logger)
-    data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, subset) for subset in ["train", "val_other", "val_subevent", "val_patches"]}
+    subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
+    data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, subset) for subset in subsets}
     loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True).to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["number_epochs"])
 
-    losses = {"total_train_losses": [], "total_val_other_losses": [], "total_val_subevent_losses": [], "total_val_patches_losses": [],
-              "epoch_train_losses": [], "epoch_val_other_losses": [], "epoch_val_subevent_losses": [], "epoch_val_patches_losses": []}
+    losses = {f"total_{subset}_losses": [] for subset in subsets}
+    losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
 
     for epoch in range(1, config["number_epochs"]+1):
 
         epoch_start_time = time.time()
-        losses["epoch_train_losses"], losses["epoch_validation_losses"] = [], []
+        losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
 
         model.train()
         for data in tqdm(data_loaders["train"], desc="Training", leave=False):
@@ -40,7 +42,7 @@ def train(config_path, data_folder, modelling_folder, device, logger):
             
         model.eval()
         with torch.no_grad():
-            for validation_loader in ["val_other", "val_subevent", "val_patches"]:
+            for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
                 for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
                     local_features = data["local_features"]
                     local_label = data["local_label"].to(device)
@@ -51,7 +53,7 @@ def train(config_path, data_folder, modelling_folder, device, logger):
         scheduler.step()
 
         loss_string = f"Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
-        for loss_type in ["train", "val_other", "val_subevent", "val_patches"]:
+        for loss_type in subsets:
             losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
             loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
         logger.info(loss_string)
@@ -62,7 +64,7 @@ def train(config_path, data_folder, modelling_folder, device, logger):
             logger.info(f"Saved the model to: {model_save_path}")
 
         if config["calculate_metrics_on_epoch"] != 0 and ((epoch % config["calculate_metrics_on_epoch"]) == 0):
-            for type in ["train", "val_other", "val_subevent", "val_patches"]:
+            for type in subsets:
                 metrics.calculate_metrics(config, config_name, model, data_loaders[type], modelling_folder, epoch, logger, device, subset=type)
 
     plot_losses(losses, config_name, modelling_folder)

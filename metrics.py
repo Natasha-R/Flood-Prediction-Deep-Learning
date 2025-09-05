@@ -52,7 +52,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
     # save the metrics results
     metrics = pd.DataFrame(metrics)
     metrics_path = f"{modelling_folder}/metrics/{config_name}.csv"
-    logger.info(f"Saving evaluation metrics to {metrics_path}")
+    logger.info(f"Saving {subset} evaluation metrics to {metrics_path}")
     metrics.to_csv(metrics_path, mode="a", header=not os.path.exists(metrics_path), index=False)
 
 if __name__ == "__main__":

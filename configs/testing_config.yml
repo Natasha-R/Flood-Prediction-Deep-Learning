@@ -1,6 +1,6 @@
 architecture: "test"
 
-features: ["dem", "permanent_water", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density"]
+features: ["dem"]
 
 separate_flood_trace_label: False
 
@@ -9,7 +9,9 @@ learning_rate: 0.001
 weight_decay: 0
 
 batch_size: 32
-number_workers: 20
+number_workers: 32
 
-save_model_on_epoch: 3
-calculate_metrics_on_epoch: 3
+save_model_on_epoch: 0
+calculate_metrics_on_epoch: 0
+
+data_subset_file: "testing_data_subset"

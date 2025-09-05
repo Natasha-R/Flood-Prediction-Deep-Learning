@@ -13,7 +13,7 @@ class TestModel(nn.Module):
     def forward(self, local_features):
         return self.conv(local_features["soil_moisture_one_week"].to(self.device))
 
-######## BasicUNet -- https://github.com/jaxony/unet-pytorch
+######## LocalUNet -- https://github.com/jaxony/unet-pytorch
 
 def conv3x3(in_channels, out_channels, stride=1, padding=1, bias=True, groups=1):    
     return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=padding, bias=bias, groups=groups)
@@ -54,18 +54,25 @@ class UpConv(nn.Module):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         return x
-class BasicUNet(nn.Module):
+    
+class LocalUNet(nn.Module):
     def __init__(self, config, device, depth=5, start_filts=64, up_mode="transpose"):
-        super(BasicUNet, self).__init__()
+        super(LocalUNet, self).__init__()
+
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.channels_in_features = {"dem":1, "permanent_water":1, "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":1}
+        self.channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
+                                     "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3,
+                                     "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":1}
         self.in_channels = sum([self.channels_in_features[feature] for feature in config["features"]])
+        self.use_embedding = True if "soil_class" in config["features"] else False
+        self.features = [feature for feature in config["features"] if feature != "soil_class"]
         self.start_filts = start_filts
         self.depth = depth
         self.down_convs = []
         self.up_convs = []
         self.device = device
+
         for i in range(depth):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
@@ -80,9 +87,14 @@ class BasicUNet(nn.Module):
         self.conv_final = conv1x1(outs, self.num_classes)
         self.down_convs = nn.ModuleList(self.down_convs)
         self.up_convs = nn.ModuleList(self.up_convs)
+        self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=3)
+
     def forward(self, local_features):
         encoder_outs = []
-        x = torch.concat(list(local_features.values()), dim=1).to(self.device)
+        embedded_features = []
+        if self.use_embedding:
+            embedded_features.append(self.embedding(local_features["soil_class"].int()).squeeze().permute(0, 3, 1, 2).squeeze())
+        x = torch.concat(embedded_features + [local_features[feature] for feature in self.features], dim=1).to(self.device)
         for i, module in enumerate(self.down_convs):
             x, before_pool = module(x)
             encoder_outs.append(before_pool)
