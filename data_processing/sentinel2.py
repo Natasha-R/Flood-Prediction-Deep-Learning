@@ -252,7 +252,7 @@ def download_sentinel2(data_folder, scale):
                     input_data=[
                         SentinelHubRequest.input_data(
                             data_collection=DataCollection.SENTINEL2_L2A.define_from(name="s2", service_url="https://sh.dataspace.copernicus.eu"),
-                            time_interval=(aois.loc[index, "availability_date"], aois.loc[index, "availability_date"]),
+                            time_interval=(aois.loc[index, "availability_date"], aois.loc[index, "availability_date"] + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)),
                             mosaicking_order=MosaickingOrder.MOST_RECENT
                             )],
                     responses=[SentinelHubRequest.output_response("default", MimeType.TIFF)],

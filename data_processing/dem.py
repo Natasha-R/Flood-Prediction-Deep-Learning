@@ -125,21 +125,24 @@ def create_dem_scales(data_folder, global_folder, scale):
         # extract all of the DEM tiles that intersect with the patch geometry
         tiles = list(fabdem[fabdem.intersects(geometry)]["file_name"])
         tiles = [f"{global_folder}/global_fabdem/{tile[0]}{tile[2:]}" for tile in tiles]
+        all_idx = []
         for idx, tile in enumerate(tiles):
             with rasterio.open(tile) as file:
-                out_image, out_transform = mask(file, [geometry], crop=True)
-                out_meta = file.meta.copy()
-                out_meta.update({"driver": "GTiff", "dtype": "int16", "transform": out_transform,
-                                 "height": out_image.shape[1], "width": out_image.shape[2]})
-                out_meta.pop("nodata", None)
-                out_image = np.where(out_image == -9999, 0, out_image)
-                out_image = np.round(out_image).astype(np.int16)
-                with rasterio.open(f"{dem_folder}/temp_{idx}.tif", "w", **out_meta) as file:
-                    file.write(out_image)
-                    file.nodata = None
+                if shapely.geometry.box(*file.bounds).intersects(geometry):
+                    out_image, out_transform = mask(file, [geometry], crop=True)
+                    out_meta = file.meta.copy()
+                    out_meta.update({"driver": "GTiff", "dtype": "int16", "transform": out_transform,
+                                    "height": out_image.shape[1], "width": out_image.shape[2]})
+                    out_meta.pop("nodata", None)
+                    out_image = np.where(out_image == -9999, 0, out_image)
+                    out_image = np.round(out_image).astype(np.int16)
+                    with rasterio.open(f"{dem_folder}/temp_{idx}.tif", "w", **out_meta) as file:
+                        file.write(out_image)
+                        file.nodata = None
+                    all_idx.append(idx)
 
         # combine all of the individual DEM tiles
-        temp_tiles_paths = [f"{dem_folder}/temp_{idx}.tif" for idx in range(len(tiles))]
+        temp_tiles_paths = [f"{dem_folder}/temp_{idx}.tif" for idx in all_idx]
         gdal.Warp(f"{dem_folder}/{patch_name}", temp_tiles_paths, 
                   srcSRS="EPSG:4326", dstSRS="EPSG:4326", format='GTiff', outputType=gdal.GDT_Int16, creationOptions=["COMPRESS=LZW"],
                   resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)

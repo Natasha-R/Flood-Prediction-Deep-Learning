@@ -95,7 +95,8 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             # extract all water polygons from the intersecting permanent water grid tiles
             grid_intersects = global_grid[global_grid.intersects(raster_extents["geometry"][index])]
             grid_paths = [f"{global_folder}/global_permanent_water/{grid_id}.geojson" for grid_id in list(grid_intersects["grid_id"])]
-            water_polygons = pd.concat([gpd.read_file(grid_path) for grid_path in grid_paths if os.path.isfile(grid_path)]).drop_duplicates("geometry")
+            grid_tiles = [gpd.read_file(grid_path) for grid_path in grid_paths if os.path.isfile(grid_path)]
+            water_polygons = pd.concat(grid_tiles).drop_duplicates("geometry") if grid_tiles else gpd.GeoDataFrame(columns=["geometry"])
 
             # merge all sea and water polygons and then clip to the extent of the raster
             permanent_water = pd.concat([seas_polygons, water_polygons], ignore_index=True)[["geometry"]]
