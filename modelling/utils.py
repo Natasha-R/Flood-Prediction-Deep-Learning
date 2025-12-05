@@ -48,16 +48,20 @@ def load_config(config_path, logger=None):
 
     config_name = config_path.split("/")[-1].split(".")[0]
     config["num_classes"] = 4 if config["separate_flood_trace_label"] else 3
+    class_features = ["soil_class", "land_cover"]
+    config["class_features_exist"] = any(feature in class_features for feature in config["features"])
 
     return config, config_name
 
 def load_model(config, device, logger, pretrained_path=None):
 
     # load the model architecture
-    if config["architecture"].lower()=="test":
-        model = architectures.TestModel(config, device)
-    elif config["architecture"].lower()=="localunet":
-        model = architectures.LocalUNet(config, device)
+    if config["architecture"].lower()=="basicunet":
+        model = architectures.BasicUNet(config)
+    elif config["architecture"].lower()=="chainedunet":
+        model = architectures.ChainedUNet(config)
+    else:
+        raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 
     # load in any pretrained model weights
     if pretrained_path:
@@ -76,3 +80,11 @@ def load_model(config, device, logger, pretrained_path=None):
     logger.info(f"Model loaded onto: {device_names}")
 
     return model
+
+def find_num_channels(config):
+    channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
+                                "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3,
+                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2}
+    in_channels = sum([channels_in_features[feature] for feature in config["features"]])
+    in_embeddings = sum([channels_in_features[feature] for feature in config["features"] if "class" in feature])
+    return in_channels, in_embeddings

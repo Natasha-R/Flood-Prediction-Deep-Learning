@@ -1,0 +1,22 @@
+architecture: "BasicUNet"
+
+features: ["dem", "soil_bulk_density", "soil_moisture_one_day"]
+
+scales: ["local", "context", "basin"]
+local_weight: 1
+context_weight: 1
+basin_weight: 1
+
+separate_flood_trace_label: False
+
+number_epochs: 50
+learning_rate: 0.001
+weight_decay: 0
+
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 50
+calculate_metrics_on_epoch: 50
+
+data_subset_file: "testing_data_subset"

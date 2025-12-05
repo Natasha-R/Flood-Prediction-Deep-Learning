@@ -19,7 +19,6 @@ def train(config_path, data_folder, modelling_folder, device, logger):
     subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, subset) for subset in subsets}
     loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True)
-    #loss_function = torch.nn.CrossEntropyLoss(reduction="mean")
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["number_epochs"])
 

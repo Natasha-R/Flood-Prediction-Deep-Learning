@@ -1,19 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import modelling.utils as utils
 
-######## TestModel
-
-class TestModel(nn.Module):
-    def __init__(self, config, device):
-        super(TestModel, self).__init__()
-        self.conv = nn.Conv2d(in_channels=2, out_channels=config["num_classes"], kernel_size=(1, 1))
-        self.device = device
-
-    def forward(self, local_features):
-        return self.conv(local_features["soil_moisture_one_week"].to(self.device))
-
-######## LocalUNet -- https://github.com/jaxony/unet-pytorch
+######## BasicUNet -- https://github.com/jaxony/unet-pytorch
 
 def conv3x3(in_channels, out_channels, stride=1, padding=1, bias=True, groups=1):    
     return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=padding, bias=bias, groups=groups)
@@ -55,23 +45,24 @@ class UpConv(nn.Module):
         x = F.relu(self.conv2(x))
         return x
     
-class LocalUNet(nn.Module):
-    def __init__(self, config, device, depth=5, start_filts=64, up_mode="transpose"):
-        super(LocalUNet, self).__init__()
+class BasicUNet(nn.Module):
+    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
+        super(BasicUNet, self).__init__()
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
-                                     "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3,
-                                     "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":1}
-        self.in_channels = sum([self.channels_in_features[feature] for feature in config["features"]])
-        self.use_embedding = True if "soil_class" in config["features"] else False
-        self.features = [feature for feature in config["features"] if feature != "soil_class"]
+        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = self.in_channels * len(config["scales"])
+        self.in_embeddings = self.in_embeddings * len(config["scales"])
         self.start_filts = start_filts
         self.depth = depth
         self.down_convs = []
         self.up_convs = []
-        self.device = device
+        self.feature_classes_exist = False
+        if self.in_embeddings > 0:
+             self.feature_classes_exist = True
+             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+        self.scales = config["scales"]
 
         for i in range(depth):
             ins = self.in_channels if i == 0 else outs
@@ -84,22 +75,145 @@ class LocalUNet(nn.Module):
             outs = ins // 2
             up_conv = UpConv(ins, outs, up_mode=up_mode)
             self.up_convs.append(up_conv)
-        self.conv_final = conv1x1(outs, self.num_classes)
+        self.local_final = conv1x1(outs, self.num_classes)
+        self.context_final = conv1x1(outs, self.num_classes)
+        self.basin_final = conv1x1(outs, self.num_classes)
         self.down_convs = nn.ModuleList(self.down_convs)
         self.up_convs = nn.ModuleList(self.up_convs)
-        self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=3)
 
-    def forward(self, local_features):
+    def forward(self, data):
         encoder_outs = []
-        embedded_features = []
-        if self.use_embedding:
-            embedded_features.append(self.embedding(local_features["soil_class"].int()).squeeze().permute(0, 3, 1, 2).squeeze())
-        x = torch.concat(embedded_features + [local_features[feature] for feature in self.features], dim=1).to(self.device)
+        
+        if self.feature_classes_exist:
+            x = torch.concat([torch.concat([data[f"{scale}_features"], 
+                                            self.embedding(torch.clip(data[f"{scale}_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)],
+                                            dim=1) for scale in self.scales], dim=1)
+        else:
+            x = torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1)
+
         for i, module in enumerate(self.down_convs):
             x, before_pool = module(x)
             encoder_outs.append(before_pool)
         for i, module in enumerate(self.up_convs):
             before_pool = encoder_outs[-(i+2)]
             x = module(before_pool, x)
-        x = self.conv_final(x)
-        return x
+
+        predictions = {}
+        predictions["local_pred"] = self.local_final(x)
+        if "context" in self.scales:
+            predictions["context_pred"] = self.context_final(x)
+        if "basin" in self.scales:
+            predictions["basin_pred"] = self.basin_final(x)
+        return predictions
+    
+class ChainedUNet(nn.Module):
+    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
+        super(ChainedUNet, self).__init__()
+
+        self.up_mode = up_mode
+        self.num_classes = config["num_classes"]
+        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.start_filts = start_filts
+        self.depth = depth
+
+        self.local_down_convs = []
+        self.local_up_convs = []
+        self.context_down_convs = []
+        self.context_up_convs = []
+        self.basin_down_convs = []
+        self.basin_up_convs = []
+
+        self.feature_classes_exist = False
+        if self.in_embeddings > 0:
+             self.feature_classes_exist = True
+             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+        self.scales = config["scales"]
+
+        for i in range(depth):
+            ins = self.in_channels if i == 0 else outs
+            outs = self.start_filts*(2**i)
+            pooling = True if i < depth-1 else False
+            down_conv = DownConv(ins, outs, pooling=pooling)
+            self.basin_down_convs.append(down_conv)
+        for i in range(depth-1):
+            ins = outs
+            outs = ins // 2
+            up_conv = UpConv(ins, outs, up_mode=up_mode)
+            self.basin_up_convs.append(up_conv)      
+        self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
+
+        for i in range(depth):
+            ins = self.in_channels + self.num_classes if i == 0 else outs
+            outs = self.start_filts*(2**i)
+            pooling = True if i < depth-1 else False
+            down_conv = DownConv(ins, outs, pooling=pooling)
+            self.context_down_convs.append(down_conv)
+        for i in range(depth-1):
+            ins = outs
+            outs = ins // 2
+            up_conv = UpConv(ins, outs, up_mode=up_mode)
+            self.context_up_convs.append(up_conv)
+        self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
+
+        for i in range(depth):
+            ins = self.in_channels + self.num_classes if i == 0 else outs
+            outs = self.start_filts*(2**i)
+            pooling = True if i < depth-1 else False
+            down_conv = DownConv(ins, outs, pooling=pooling)
+            self.local_down_convs.append(down_conv)
+        for i in range(depth-1):
+            ins = outs
+            outs = ins // 2
+            up_conv = UpConv(ins, outs, up_mode=up_mode)
+            self.local_up_convs.append(up_conv)
+        self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
+
+        self.local_down_convs = nn.ModuleList(self.local_down_convs)
+        self.local_up_convs = nn.ModuleList(self.local_up_convs)
+        self.context_down_convs = nn.ModuleList(self.context_down_convs)
+        self.context_up_convs = nn.ModuleList(self.context_up_convs)
+        self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
+        self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
+
+    def forward(self, data):
+
+        basin_encoder_outs = []
+        if self.feature_classes_exist:
+            x = torch.concat([data[f"basin_features"], self.embedding(torch.clip(data[f"basin_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+        else:
+            x = data[f"basin_features"]
+        for i, module in enumerate(self.basin_down_convs):
+            x, basin_before_pool = module(x)
+            basin_encoder_outs.append(basin_before_pool)
+        for i, module in enumerate(self.basin_up_convs):
+            basin_before_pool = basin_encoder_outs[-(i+2)]
+            x = module(basin_before_pool, x)
+        basin_pred = self.basin_final(x)
+
+        context_encoder_outs = []
+        if not self.feature_classes_exist:
+            x = torch.concat([F.softmax(basin_pred, dim=1), data[f"context_features"]], dim=1)
+        else:
+            x = torch.concat([basin_pred, data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+        for i, module in enumerate(self.context_down_convs):
+            x, context_before_pool = module(x)
+            context_encoder_outs.append(context_before_pool)
+        for i, module in enumerate(self.context_up_convs):
+            context_before_pool = context_encoder_outs[-(i+2)]
+            x = module(context_before_pool, x)
+        context_pred = self.context_final(x)
+
+        local_encoder_outs = []
+        if not self.feature_classes_exist:
+            x = torch.concat([F.softmax(context_pred, dim=1), data[f"local_features"]], dim=1)
+        else:
+            x = torch.concat([context_pred, data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+        for i, module in enumerate(self.local_down_convs):
+            x, local_before_pool = module(x)
+            local_encoder_outs.append(local_before_pool)
+        for i, module in enumerate(self.local_up_convs):
+            local_before_pool = local_encoder_outs[-(i+2)]
+            x = module(local_before_pool, x)
+        local_pred = self.local_final(x)
+
+        return {"local_pred": local_pred, "context_pred": context_pred, "basin_pred": basin_pred}
