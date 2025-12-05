@@ -10,6 +10,7 @@ import modelling.utils as utils
 import argparse
 import pandas as pd
 from visualise import plot_losses
+import modelling.architectures as architectures
 
 def train(config_path, data_folder, modelling_folder, device, logger):
 
@@ -17,7 +18,8 @@ def train(config_path, data_folder, modelling_folder, device, logger):
     model = utils.load_model(config, device, logger)
     subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, subset) for subset in subsets}
-    loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True).to(device)
+    loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True)
+    #loss_function = torch.nn.CrossEntropyLoss(reduction="mean")
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["number_epochs"])
 
@@ -32,10 +34,12 @@ def train(config_path, data_folder, modelling_folder, device, logger):
         model.train()
         for data in tqdm(data_loaders["train"], desc="Training", leave=False):
             optimizer.zero_grad()
-            local_features = data["local_features"] # BCHW
-            local_label = data["local_label"].to(device) # BHW
-            model_output = model(local_features) #BclassesHW
-            loss = loss_function(model_output, local_label)
+            for item in data.keys():
+                data[item] = data[item].to(device) #BCHW (features) #BHW (label)
+            model_output = model(data) #BclassesHW
+            loss = 0.0
+            for scale in config["scales"]:
+                loss = loss + config[f"{scale}_weight"] * loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
             loss.backward()
             optimizer.step()
             losses["epoch_train_losses"].append(loss.item())
@@ -44,10 +48,12 @@ def train(config_path, data_folder, modelling_folder, device, logger):
         with torch.no_grad():
             for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
                 for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
-                    local_features = data["local_features"]
-                    local_label = data["local_label"].to(device)
-                    model_output = model(local_features)
-                    loss = loss_function(model_output, local_label)
+                    for item in data.keys():
+                        data[item] = data[item].to(device) #BCHW (features) #BHW (label)
+                    model_output = model(data)
+                    loss = 0.0
+                    for scale in config["scales"]:
+                        loss = loss + config[f"{scale}_weight"] * loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
                     losses[f"epoch_{validation_loader}_losses"].append(loss.item())
 
         scheduler.step()

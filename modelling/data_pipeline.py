@@ -9,45 +9,6 @@ import argparse
 from tqdm import tqdm
 from collections import defaultdict
 
-class FloodDataset(torch.utils.data.Dataset):
-     """
-     The dataset for the flood data.
-     """
-     def __init__(self, config, data_folder, subset=None, subevent=None, event=None):
-          
-          self.config = config
-          self.data_folder = data_folder
-
-          # subset the data patches based on a particular train/validation split, subevent, or event
-          
-          data_subset = pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")
-          if subset:
-                data_subset = data_subset[data_subset["subset"]==subset]
-          if subevent:
-               data_subset = data_subset[data_subset["subevent"]==subevent]
-          if event: 
-               data_subset = data_subset[data_subset["event"]==event]
-          self.patches = list(data_subset["patch"])
-
-          self.transform = transforms.Compose([ToTensor(),
-                                               ProcessLabel(config),
-                                               Normalize(config, data_folder)])
-
-     def __len__(self):
-          return len(self.patches)
-     
-     def __getitem__(self, index):
-
-          local_label = tf.imread(f"{self.data_folder}/local/label/{self.patches[index]}") # HxW
-          local_features = {feature : tf.imread(f"{self.data_folder}/local/{feature}/{self.patches[index]}") for feature in self.config["features"]} # HxWxC
-
-          data = {"local_features": local_features, 
-                  "local_label": local_label}
-
-          data = self.transform(data)
-
-          return data
-
 def create_data_loader(config, data_folder, subset=None, subevent=None, event=None):
      """
      Create a dataloader for a particular data subset, subevent or event.
@@ -58,30 +19,88 @@ def create_data_loader(config, data_folder, subset=None, subevent=None, event=No
      loader = torch.utils.data.DataLoader(dataset,
                                           batch_size=config["batch_size"],
                                           num_workers=config["number_workers"],
-                                          shuffle=True,
-                                          pin_memory=True)
+                                          shuffle=False,
+                                          pin_memory=False)
+
      return loader
 
-class ToTensor(object):
-     def __call__(self, data):
-          data["local_features"] = {feature_name : torch.from_numpy(np.expand_dims(feature, 0).astype(np.float32)) 
-                                    if feature.ndim == 2 
-                                    else torch.from_numpy(feature.astype(np.float32)).permute(2, 0, 1) 
-                                    for feature_name, feature in data["local_features"].items()} # CxHxW
-          data["local_label"] = torch.from_numpy(data["local_label"].astype(np.int64)) # HxW
+class FloodDataset(torch.utils.data.Dataset):
+     """
+     The dataset for the flood data.
+     """
+     def __init__(self, config, data_folder, subset=None, subevent=None, event=None):
+          
+          self.config = config
+          self.data_folder = data_folder
+          self.scales = self.config["scales"]
+          self.class_features = ["soil_class", "land_cover"]
+          self.class_features_exist = config["class_features_exist"]
+
+          # subset the data patches based on a particular train/validation split, subevent, or event
+          data_subset = pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")
+          if subset:
+                data_subset = data_subset[data_subset["subset"]==subset]
+          if subevent:
+               data_subset = data_subset[data_subset["subevent"]==subevent]
+          if event: 
+               data_subset = data_subset[data_subset["event"]==event]
+          self.patches = list(data_subset["patch"])
+
+          self.transform = transforms.Compose([ToTensor(config),
+                                               Normalize(config, data_folder)])
+
+     def __len__(self):
+          return len(self.patches)
+     
+     def get_data(self, index, scale, class_feature):
+          return [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.config["features"] if ((feature in self.class_features) == class_feature)]
+     
+     def get_label(self, index, scale):
+          return tf.imread(f"{self.data_folder}/{scale}/label/{self.patches[index]}")
+     
+     def __getitem__(self, index):
+
+          data = {}
+
+          for scale in self.scales:
+               data[f"{scale}_features"] = self.get_data(index, scale, class_feature=False)
+               data[f"{scale}_label"] = self.get_label(index, scale)
+               if self.class_features_exist:
+                    data[f"{scale}_classes"] = self.get_data(index, scale, class_feature=True)
+
+          data = self.transform(data)
+
           return data
 
-class ProcessLabel(object):
+class ToTensor(object):
+
      def __init__(self, config):
-          # 0: no data, 1: aoi, 2: flood trace, 3: flooded area
           self.config = config
+          self.scales = self.config["scales"]
+          self.class_features_exist = config["class_features_exist"]
+
+     def concat_data(self, features):
+          return torch.concat([torch.from_numpy(np.expand_dims(feature, 0).astype(np.float32)) if feature.ndim == 2 else torch.from_numpy(feature.astype(np.float32)).permute(2, 0, 1) for feature in features], dim=0)
+     
      def __call__(self, data):
-          if not self.config["separate_flood_trace_label"]:
-               data["local_label"][data["local_label"]==3] = 2
+
+          for scale in self.scales:
+               data[f"{scale}_features"] = self.concat_data(data[f"{scale}_features"]) # CxHxW
+
+               data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
+               if not self.config["separate_flood_trace_label"]:
+                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # 0: no data, 1: aoi, 2: flood trace, 3: flooded area
+
+               if self.class_features_exist:
+                    data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])
+
           return data
 
 class Normalize(object):
      def __init__(self, config, data_folder):
+
+          self.config = config
+          self.scales = self.config["scales"]
 
           # import the metadata with the predefined shift and scale factors for each feature
           with open(f"{data_folder}/metadata/zscore.json") as file:
@@ -89,22 +108,30 @@ class Normalize(object):
 
           # define the number of bands contained within each feature
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
-                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", "sentinel1", "flow_accumulation"], 
-                                      [1, 1, 2, 2, 12, 16, 3, 1])}
-          
-          # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
-          def nested_defaultdict():
-               return defaultdict(nested_defaultdict)
-          self.zscore_values = nested_defaultdict()
-          features_to_transform = [feature for feature in config["features"] if not feature in ["permanent_water", "soil_class", "flow_direction"]]
-          for feature in features_to_transform:
-               self.zscore_values[feature]["shift"] = torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]])
-               self.zscore_values[feature]["scale"] = torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])
+                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
+                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover"], 
+                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1])}
+          self.non_transformed_features = ["permanent_water", "soil_class", "flow_direction", "land_cover"]
 
+          # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
+          self.zscore_values = {}
+          self.features_to_transform = [feature for feature in config["features"] if not feature in self.non_transformed_features]
+          for feature in self.features_to_transform:
+               self.zscore_values[feature] = {"shift": torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]]),
+                                              "scale": torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])}
+               
+          # find the location (index range) within the tensor for all of the classes
+          self.feature_channels = {}
+          open_slice = 0
+          for feature_name in config["features"]:
+               number_channels = len(self.feature_indices[feature_name])
+               self.feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
+               open_slice += number_channels
+               
      def apply_normalization(self, feature_name, feature):
 
           # these features do not need to be scaled
-          if feature_name in ["permanent_water", "soil_class", "flow_direction"]:
+          if feature_name in self.non_transformed_features:
                return feature
           
           # apply log to features that need to be transformed
@@ -117,14 +144,16 @@ class Normalize(object):
           elif feature == "precipitation":
                feature = torch.log(feature+1)
 
-          # scale the data using the predefined shift and scale factors, performing either z-normalisation or min-max normalization
-          # clip the data to -3/+3 (for the z-normalized features)
+          # scale the data using the predefined shift and scale factors, performing either z-normalisation or min-max normalization, and clip the data to -3/+3
           return torch.clamp((feature - self.zscore_values[feature_name]["shift"][:, None, None]) / self.zscore_values[feature_name]["scale"][:, None, None], min=-3, max=3)
           
      def __call__(self, data):
           
           # normalize the features
-          data["local_features"] = {feature_name : self.apply_normalization(feature_name, feature) for feature_name, feature in data["local_features"].items()}
+          for feature_name in self.config["features"]:
+               for scale in self.scales:
+                    channels = self.feature_channels[feature_name]
+                    data[f"{scale}_features"][channels] = self.apply_normalization(feature_name, data[f"{scale}_features"][channels])
 
           return data
      

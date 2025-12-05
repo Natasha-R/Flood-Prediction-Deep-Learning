@@ -6,6 +6,7 @@ from torchmetrics.segmentation import MeanIoU
 import torch
 import pandas as pd
 import os
+from collections import defaultdict
 
 def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset="val_other", subevent=None, event=None):
 
@@ -19,16 +20,18 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
     metrics_names = ["f1", "precision", "recall", "accuracy"]
 
     # make model predictions on the dataset
-    predictions, labels = [], []
+    predictions, labels = defaultdict(list), defaultdict(list)
     for data in loader:
-        local_features = data["local_features"]
-        local_label = data["local_label"].to(device) 
-        model_output = model(local_features)
-        predicted_class = torch.argmax(model_output, dim=1)
-        predictions.append(predicted_class)
-        labels.append(local_label)
-    predictions = torch.concat(predictions, dim=0)
-    labels = torch.concat(labels, dim=0)
+        for item in data.keys():
+            data[item] = data[item].to(device)
+        model_output = model(data)
+        for scale in config["scales"]:
+            predictions[scale].append(torch.argmax(model_output[f"{scale}_pred"], dim=1))
+            labels[scale].append(data[f"{scale}_label"])
+
+    for scale in config["scales"]:
+        predictions[scale] = torch.concat(predictions[scale], dim=0)
+        labels[scale] = torch.concat(labels[scale], dim=0)
 
     if config["separate_flood_trace_label"]:
        class_names = ["flooded_area",  "flood_trace", "no_flood"] 
@@ -42,12 +45,13 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
     metrics.update({key: [str(value)] for key, value in config.items()})
 
     # calculate metrics from the model predictions
-    for class_index, class_name in zip(class_indices, class_names):
-        for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
-            metric = metrics_function(predictions, labels)[class_index]
-            metrics[f"{metrics_name}_{class_name}"] = [f"{metric.item():.3f}"]
-        metric = class_iou(predictions.long().unsqueeze(-1), labels.long().unsqueeze(-1))[class_index]
-        metrics[f"iou_{class_name}"] = [f"{metric.item():.3f}"]
+    for scale in config["scales"]:
+        for class_index, class_name in zip(class_indices, class_names):
+            for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
+                metric = metrics_function(predictions[scale], labels[scale])[class_index]
+                metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
+            metric = class_iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[class_index]
+            metrics[f"iou_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
 
     # save the metrics results
     metrics = pd.DataFrame(metrics)
@@ -62,7 +66,7 @@ if __name__ == "__main__":
     parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('--gpu', default="cuda:0", help="Specify which gpu to use. 'cuda', 'cuda:0', 'cuda:1', etc.")
 
-    parser.add_argument('--subset', default="validation", help="Specify a data subset to calculate metrics on.")
+    parser.add_argument('--subset', default="val", help="Specify a data subset to calculate metrics on.")
     parser.add_argument('--subevent', default=None, help="Specify a subevent to calculate metrics on.")
     parser.add_argument('--event', default=None, help="Specify an event to calculate metrics on.")
     
