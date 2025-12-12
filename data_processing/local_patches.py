@@ -93,7 +93,6 @@ def create_features_local_patches(data_folder):
     resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", "flow_accumulation": "bilinear",
                     "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear",
                     "soil_class": "nearest", "permanent_water": "nearest", "flow_direction":"nearest"}
-    features = ["sentinel1", "sentinel2", "dem", "flow_direction"]
     for feature in features:
         if not os.path.isdir(f"{data_folder}/local/{feature}/"):
             os.mkdir(f"{data_folder}/local/{feature}/")

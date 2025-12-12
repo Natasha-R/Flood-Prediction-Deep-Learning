@@ -232,7 +232,7 @@ def create_sentinel1_aoi_date_difference(data_folder, scale):
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(shapely.wkt.loads)
         sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
-        sentinel1_raster_folder = f"{data_folder}/{scale}/sentinel1/"
+        sentinel1_raster_folder = f"{data_folder}/{scale}/sentinel1_aoi/"
         sentinel1_download_folder = f"{data_folder}/{scale}/download_sentinel1/"
     aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
@@ -331,27 +331,28 @@ def create_sentinel1_rasters(data_folder):
 def create_sentinel1_scale_rasters(data_folder, scale):
             
     # import metadata
-    raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
-    raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
-    aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
+    patch_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
+    patch_extents["geometry"] = patch_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
+    aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
+    aoi_folder = f"{data_folder}/{scale}/sentinel1_aoi"
     save_folder = f"{data_folder}/{scale}/sentinel1"
+    if not os.path.isdir(save_folder):
+        os.mkdir(save_folder)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(patch_extents))):
 
-        bounds = raster_extents.loc[index, "geometry"].bounds
-        subevent = raster_extents["subevent"][index]
-        aoi_id = aois[(aois["geometry_event_date_id"] == raster_extents.loc[index, "geometry_event_date_id"]) & (aois["subevent"] == raster_extents.loc[index, "subevent"])].index[0]
-        aoi_path = f"{save_folder}/{subevent}_aoi_{aoi_id}.tif"
-        patch = raster_extents["patch"].iloc[index]
+        bounds = patch_extents.loc[index, "geometry"].bounds
+        subevent = patch_extents["subevent"][index]
+        aoi_id = aois[(aois["geometry_event_date_id"] == patch_extents.loc[index, "geometry_event_date_id"]) & (aois["subevent"] == patch_extents.loc[index, "subevent"])].index[0]
+        aoi_path = f"{aoi_folder}/{subevent}_aoi_{aoi_id}.tif"
+        patch = patch_extents["patch"].iloc[index]
         file_name = f"{save_folder}/{patch}"
 
-        gdal.Warp(file_name, aoi_path, format='GTiff', creationOptions=["COMPRESS=LZW"],
-            resampleAlg="bilinear", width=256, height=256, outputBounds=bounds)
-
-    # remove the separate aoi tiff files
-    aoi_tiffs = [os.path.join(root, file) for root, dirs, files in os.walk(f"{save_folder}") for file in files if "aoi" in file]
-    for tiff in aoi_tiffs:
-        os.remove(tiff)
+        if os.path.exists(aoi_path):
+            gdal.Warp(file_name, aoi_path, format='GTiff', creationOptions=["COMPRESS=LZW"],
+                resampleAlg="bilinear", width=256, height=256, outputBounds=bounds)
+        else:
+            print(f"{aoi_path} does not exist for {patch}!", flush=True)
 
 if __name__ == "__main__":
 

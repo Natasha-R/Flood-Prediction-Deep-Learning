@@ -270,12 +270,16 @@ def set_sentinel2_nodata(data_folder, scale):
     """
     Set the nodata value to 0 in the downloaded sentinel 2 data.
     """
-    all_responses = [os.path.join(root, file) for root, dirs, files in os.walk(f"{data_folder}/{scale}/download_sentinel2") for file in files if file.endswith(".tiff")]
+    if scale == "local":
+        sentinel2_folder = f"{data_folder}/full_subevent/sentinel_2/"
+    else:
+        sentinel2_folder = f"{data_folder}/{scale}/download_sentinel2"
+    all_responses = [os.path.join(root, file) for root, dirs, files in os.walk(sentinel2_folder) for file in files if file.endswith(".tiff")]
     for response_path in tqdm(all_responses):
-        gdal.PushErrorHandler('CPLQuietErrorHandler')
-        gdal.Translate(destName=response_path[:-5] + "_temp.tiff", srcDS=response_path, noData=0, creationOptions=["COMPRESS=LZW"])
-        gdal.PopErrorHandler()
-        shutil.move(response_path[:-5] + "_temp.tiff", response_path)
+            gdal.PushErrorHandler('CPLQuietErrorHandler')
+            gdal.Translate(destName=response_path[:-5] + "_temp.tiff", srcDS=response_path, noData=0, creationOptions=["COMPRESS=LZW"])
+            gdal.PopErrorHandler()
+            shutil.move(response_path[:-5] + "_temp.tiff", response_path)
 
 def create_sentinel2_rasters(data_folder, scale):
     """

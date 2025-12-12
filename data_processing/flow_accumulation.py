@@ -41,6 +41,9 @@ def create_flow_accumulation(data_folder, global_folder, scale):
             patch_name = raster_extents["patch"].iloc[index]
             save_path = f"{flow_acc_folder}/{patch_name}"
 
+        if os.path.exists(save_path):
+            continue
+
         # import the CEMS label as a reference to the extent of the AOIs
         with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)

@@ -70,13 +70,13 @@ def visualise_predictions(config_path, data_folder, modelling_folder, device, lo
             file.nodata = 0
 
     # save the visualisation as a jpeg, with separate files for the predictions, ground truth label, and matching
-    else:
+    elif file_type == "png":
         for image_name, index, colour_map in zip(["prediction", "label", "match"], [0, 1, 2], [label_colours, label_colours, matching_colours]):
             rgb_image = np.zeros((full_subevent.shape[1], full_subevent.shape[2], 3), dtype=np.uint8)
             for value, colour in colour_map.items():
                 for channel in range(3):
                     rgb_image[..., channel][full_subevent[index] == value] = colour[channel]
-            Image.fromarray(rgb_image).save(f"{modelling_folder}/visualise/{config_name}_{subevent}_{scale}_{image_name}.jpg", 'JPEG')
+            Image.fromarray(rgb_image).save(f"{modelling_folder}/visualise/{config_name}_{subevent}_{scale}_{image_name}.png", 'PNG')
 
     # close all open files and delete all temporary files
     for file in all_patches:
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     parser.add_argument('--subevent', default=None, help="Visualise model predictions of the specified subevent.")
     parser.add_argument('--patch', default=None, help="Visualise model predictions of the specified patch.")
     parser.add_argument('--scale', default="local", help="Define the scale for the visualisation.")
-    parser.add_argument('--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'jpg'.")
+    parser.add_argument('--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'png'.")
 
     args = parser.parse_args()
 
