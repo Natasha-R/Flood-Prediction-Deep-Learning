@@ -51,6 +51,9 @@ def load_config(config_path, logger=None):
     class_features = ["soil_class", "land_cover"]
     config["class_features_exist"] = any(feature in class_features for feature in config["features"])
 
+    if config["architecture"].lower() != "basicunet" and len(config["scales"]) == 1:
+        raise ValueError(f"For multi-scale architectures ({config['architecture']}), multiple scales of data must be used!")
+
     return config, config_name
 
 def load_model(config, device, logger, pretrained_path=None):
@@ -60,6 +63,12 @@ def load_model(config, device, logger, pretrained_path=None):
         model = architectures.BasicUNet(config)
     elif config["architecture"].lower()=="chainedunet":
         model = architectures.ChainedUNet(config)
+    elif config["architecture"].lower()=="fusedunet":
+        model = architectures.FusedUNet(config)
+    elif config["architecture"].lower()=="fusedbranchedunet":
+        model = architectures.FusedBranchedUNet(config)
+    elif config["architecture"].lower()=="multifusedbranchedunet":
+        model = architectures.MultiFusedBranchedUNet(config)
     else:
         raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 
