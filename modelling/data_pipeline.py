@@ -8,19 +8,28 @@ import os
 import argparse
 from tqdm import tqdm
 from collections import defaultdict
+from torch.utils.data.distributed import DistributedSampler
 
-def create_data_loader(config, data_folder, subset=None, subevent=None, event=None):
+def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None):
      """
      Create a dataloader for a particular data subset, subevent or event.
      """
      dataset = FloodDataset(config=config, data_folder=data_folder, subset=subset, subevent=subevent, event=event)
-     if len(dataset) == 0:
-          return None
-     loader = torch.utils.data.DataLoader(dataset,
-                                          batch_size=config["batch_size"],
-                                          num_workers=config["number_workers"],
-                                          shuffle=False,
-                                          pin_memory=False)
+
+     if ddp: 
+               loader = torch.utils.data.DataLoader(
+               dataset=dataset,
+               batch_size=config["batch_size"],
+               num_workers=config["number_workers"],
+               shuffle=False,
+               sampler=DistributedSampler(dataset=dataset,
+                                          shuffle=True))
+     else:
+          loader = torch.utils.data.DataLoader(dataset,
+                                             batch_size=config["batch_size"],
+                                             num_workers=config["number_workers"],
+                                             shuffle=True,
+                                             pin_memory=True)
 
      return loader
 

@@ -62,9 +62,10 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise the model's predictions.")
     parser.add_argument('--config_path', required=True, help="The path to the configuration file to use.")
+    parser.add_argument('--epochs', default=None, help="Load the model trained to the specified number of epochs.")
     parser.add_argument('--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
     parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
-    parser.add_argument('--gpu', default="cuda:0", help="Specify which gpu to use. 'cuda', 'cuda:0', 'cuda:1', etc.")
+    parser.add_argument('--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
     parser.add_argument('--subset', default="val", help="Specify a data subset to calculate metrics on.")
     parser.add_argument('--subevent', default=None, help="Specify a subevent to calculate metrics on.")
@@ -77,8 +78,9 @@ if __name__ == "__main__":
     logger = utils.get_logger()
 
     config, config_name = utils.load_config(args.config_path, logger)
-    model = utils.load_model(config, device=args.gpu, logger=logger, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{config['number_epochs']}.pth")
-    loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, subset=args.subset, subevent=args.subevent, event=args.event)
+    num_epochs = args.epochs if args.epochs else config['number_epochs']
+    model = utils.load_model(config, rank=int(args.gpu), logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
+    loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event)
 
-    calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=config["number_epochs"], logger=logger, device=args.gpu,
-                      subset=args.subset, subevent=args.subevent, event=args.event)
+    calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=config["number_epochs"], 
+                      logger=logger, device=int(args.gpu), subset=args.subset, subevent=args.subevent, event=args.event)

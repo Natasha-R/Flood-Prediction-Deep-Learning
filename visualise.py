@@ -9,11 +9,12 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
-def visualise_predictions(config_path, data_folder, modelling_folder, device, logger, subevent, file_type, scale, patch):
+def visualise_predictions(config_path, epochs, data_folder, modelling_folder, device, logger, subevent, file_type, scale, patch):
 
     # load the config, model, and dataset
     config, config_name = utils.load_config(config_path, logger)
-    model = utils.load_model(config, device, logger, pretrained_path=f"{modelling_folder}/models/{config_name}_{config['number_epochs']}.pth")
+    num_epochs = epochs if epochs else config['number_epochs']
+    model = utils.load_model(config, device, logger, ddp=False, pretrained_path=f"{modelling_folder}/models/{config_name}_{num_epochs}.pth")
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent)
     if patch:
         dataset.patches = [patch]
@@ -86,7 +87,7 @@ def visualise_predictions(config_path, data_folder, modelling_folder, device, lo
 
     logger.info(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
-def plot_losses(losses, config_name, modelling_folder):
+def plot_losses(losses, config_name, modelling_folder, rank, logger):
     """
     Plot the train and validation losses from model training.
     """
@@ -96,19 +97,21 @@ def plot_losses(losses, config_name, modelling_folder):
     other_colours = ["deepskyblue", "blue", "darkblue"][:len(other_loss_types)]
     for other_loss_type, colour in zip(other_loss_types, other_colours):
         ax.plot(range(1, len(losses[other_loss_type])+1), losses[other_loss_type], c=colour, label=other_loss_type, linewidth=2)
-    ax.set_title(f"Train and Validation Losses", fontsize=15)
+    ax.set_title(f"Train and Validation Losses (GPU {rank})", fontsize=15)
     ax.legend(fontsize=14), ax.grid(alpha=0.4)
     ax.tick_params(axis="both", which="major", labelsize=14)
     ax.set_xlabel("Epoch", fontsize=14), ax.set_ylabel("Loss", fontsize=14)
     fig.tight_layout()
-    fig.savefig(f"{modelling_folder}/losses/{config_name}.png", bbox_inches="tight")
+    fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}.png", bbox_inches="tight")
+    logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise the model's predictions.")
     parser.add_argument('--config_path', required=True, help="The path to the configuration file to use.")
+    parser.add_argument('--epochs', default=None, help="Load the model trained to the specified number of epochs.")
     parser.add_argument('--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
     parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
-    parser.add_argument('--gpu', default="cuda:0", help="Specify which gpu to use. 'cuda', 'cuda:0', 'cuda:1', etc.")
+    parser.add_argument('--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
     parser.add_argument('--subevent', default=None, help="Visualise model predictions of the specified subevent.")
     parser.add_argument('--patch', default=None, help="Visualise model predictions of the specified patch.")
@@ -121,5 +124,5 @@ if __name__ == "__main__":
     utils.check_cuda()
     logger = utils.get_logger()
 
-    visualise_predictions(config_path=args.config_path, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
-                          device=args.gpu, logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch)
+    visualise_predictions(config_path=args.config_path, epochs=args.epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
+                          device=int(args.gpu), logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch)
