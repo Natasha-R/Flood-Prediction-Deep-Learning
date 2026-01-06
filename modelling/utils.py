@@ -51,6 +51,7 @@ def load_config(config_path, logger=None):
     config["num_classes"] = 4 if config["separate_flood_trace_label"] else 3
     class_features = ["soil_class", "land_cover"]
     config["class_features_exist"] = any(feature in class_features for feature in config["features"])
+    config["num_class_features"] = sum([feature in class_features for feature in config["features"]])
 
     if config["architecture"].lower() != "basicunet" and len(config["scales"]) == 1:
         raise ValueError(f"For multi-scale architectures ({config['architecture']}), multiple scales of data must be used!")

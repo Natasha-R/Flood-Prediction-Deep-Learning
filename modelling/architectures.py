@@ -44,6 +44,10 @@ class UpConv(nn.Module):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         return x
+def create_embeddings(config):
+    num_classes = {"soil_class":31, "land_cover":12}
+    class_features = ["soil_class", "land_cover"]
+    return nn.ModuleList([nn.Embedding(num_embeddings=num_classes[feature], embedding_dim=3) for feature in config["features"] if feature in class_features])
     
 class BasicUNet(nn.Module):
     def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
@@ -51,17 +55,17 @@ class BasicUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = utils.find_num_channels(config)
         self.in_channels = self.in_channels * len(config["scales"])
-        self.in_embeddings = self.in_embeddings * len(config["scales"])
         self.start_filts = start_filts
         self.depth = depth
         self.down_convs = []
         self.up_convs = []
         self.feature_classes_exist = False
-        if self.in_embeddings > 0:
+        if config["class_features_exist"]:
              self.feature_classes_exist = True
-             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
 
         for i in range(depth):
@@ -87,8 +91,7 @@ class BasicUNet(nn.Module):
         encoder_outs = []
         
         if self.feature_classes_exist:
-            x = torch.concat([torch.concat([data[f"{scale}_features"], 
-                                            self.embedding(torch.clip(data[f"{scale}_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)],
+            x = torch.concat([torch.concat([data[f"{scale}_features"]] + [self.embeddings[index](torch.clip(data[f"{scale}_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)],
                                             dim=1) for scale in self.scales], dim=1)
         else:
             x = torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1)
@@ -113,14 +116,14 @@ class ChainedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
         self.depth = depth
-
         self.feature_classes_exist = False
-        if self.in_embeddings > 0:
+        if config["class_features_exist"]:
              self.feature_classes_exist = True
-             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
 
         if "basin" in self.scales:
@@ -184,7 +187,7 @@ class ChainedUNet(nn.Module):
         if "basin" in self.scales:
             basin_encoder_outs = []
             if self.feature_classes_exist:
-                x = torch.concat([data[f"basin_features"], self.embedding(torch.clip(data[f"basin_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                x = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 x = data[f"basin_features"]
             for i, module in enumerate(self.basin_down_convs):
@@ -204,9 +207,11 @@ class ChainedUNet(nn.Module):
                     x = data[f"context_features"]
             else:
                 if "basin" in self.scales:
-                    x = torch.concat([basin_pred, data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                    x = torch.concat([basin_pred, data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+
                 else:
-                    x = torch.concat([data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                    x = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+
             for i, module in enumerate(self.context_down_convs):
                 x, context_before_pool = module(x)
                 context_encoder_outs.append(context_before_pool)
@@ -223,9 +228,9 @@ class ChainedUNet(nn.Module):
                 x = torch.concat([F.softmax(basin_pred, dim=1), data[f"local_features"]], dim=1)
         else:
             if "context" in self.scales:
-                x = torch.concat([context_pred, data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                x = torch.concat([context_pred, data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
-                x = torch.concat([basin_pred, data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                x = torch.concat([basin_pred, data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
         for i, module in enumerate(self.local_down_convs):
             x, local_before_pool = module(x)
             local_encoder_outs.append(local_before_pool)
@@ -247,14 +252,15 @@ class FusedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
         self.depth = depth
 
         self.feature_classes_exist = False
-        if self.in_embeddings > 0:
+        if config["class_features_exist"]:
              self.feature_classes_exist = True
-             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
 
         if "basin" in self.scales:
@@ -307,7 +313,7 @@ class FusedUNet(nn.Module):
         if "basin" in self.scales:
             basin_encoder_outs = []
             if self.feature_classes_exist:
-                basin = torch.concat([data[f"basin_features"], self.embedding(torch.clip(data[f"basin_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 basin = data[f"basin_features"]
             for i, module in enumerate(self.basin_down_convs):
@@ -318,7 +324,7 @@ class FusedUNet(nn.Module):
         if "context" in self.scales:
             context_encoder_outs = []
             if self.feature_classes_exist:
-                context = torch.concat([data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 context = data[f"context_features"]
             for i, module in enumerate(self.context_down_convs):
@@ -328,7 +334,7 @@ class FusedUNet(nn.Module):
 
         local_encoder_outs = []
         if self.feature_classes_exist:
-            local = torch.concat([data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
         else:
             local = data[f"local_features"]
         for i, module in enumerate(self.local_down_convs):
@@ -366,14 +372,15 @@ class FusedBranchedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
         self.depth = depth
 
         self.feature_classes_exist = False
-        if self.in_embeddings > 0:
+        if config["class_features_exist"]:
              self.feature_classes_exist = True
-             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
 
         if "basin" in self.scales:
@@ -438,7 +445,7 @@ class FusedBranchedUNet(nn.Module):
         if "basin" in self.scales:
             basin_encoder_outs = []
             if self.feature_classes_exist:
-                basin = torch.concat([data[f"basin_features"], self.embedding(torch.clip(data[f"basin_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 basin = data[f"basin_features"]
             for i, module in enumerate(self.basin_down_convs):
@@ -449,7 +456,7 @@ class FusedBranchedUNet(nn.Module):
         if "context" in self.scales:
             context_encoder_outs = []
             if self.feature_classes_exist:
-                context = torch.concat([data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 context = data[f"context_features"]
             for i, module in enumerate(self.context_down_convs):
@@ -459,7 +466,7 @@ class FusedBranchedUNet(nn.Module):
 
         local_encoder_outs = []
         if self.feature_classes_exist:
-            local = torch.concat([data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
         else:
             local = data[f"local_features"]
         for i, module in enumerate(self.local_down_convs):
@@ -503,14 +510,15 @@ class MultiFusedBranchedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.in_channels, self.in_embeddings = utils.find_num_channels(config)
+        self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
         self.depth = depth
 
         self.feature_classes_exist = False
-        if self.in_embeddings > 0:
+        if config["class_features_exist"]:
              self.feature_classes_exist = True
-             self.embedding = nn.Embedding(num_embeddings=31, embedding_dim=self.in_embeddings)
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
 
         if "basin" in self.scales:
@@ -576,7 +584,7 @@ class MultiFusedBranchedUNet(nn.Module):
         if "basin" in self.scales:
             basin_encoder_outs = []
             if self.feature_classes_exist:
-                basin = torch.concat([data[f"basin_features"], self.embedding(torch.clip(data[f"basin_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 basin = data[f"basin_features"]
             for i, module in enumerate(self.basin_down_convs):
@@ -591,7 +599,7 @@ class MultiFusedBranchedUNet(nn.Module):
         if "context" in self.scales:
             context_encoder_outs = []
             if self.feature_classes_exist:
-                context = torch.concat([data[f"context_features"], self.embedding(torch.clip(data[f"context_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
             else:
                 context = data[f"context_features"]
             for i, module in enumerate(self.context_down_convs):
@@ -611,7 +619,7 @@ class MultiFusedBranchedUNet(nn.Module):
 
         local_encoder_outs = []
         if self.feature_classes_exist:
-            local = torch.concat([data[f"local_features"], self.embedding(torch.clip(data[f"local_classes"], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2)], dim=1)
+            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
         else:
             local = data[f"local_features"]
         for i, module in enumerate(self.local_down_convs):
