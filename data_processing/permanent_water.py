@@ -35,7 +35,7 @@ def download_global_permanent_water(data_folder, global_folder):
     tags = {"natural": ["water"],
             "waterway": True,
             "landuse": ["reservoir"]}
-    for index in tqdm(len(global_grid)):
+    for index in tqdm(range(len(global_grid))):
         time.sleep(10)
         geometry = global_grid["geometry"][index].bounds
         grid_id = global_grid["grid_id"][index]
@@ -72,6 +72,11 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
             raster_extents["geometry"] = raster_extents[f"{scale_name}_geometry"].apply(shapely.wkt.loads)
             permanent_water_raster_folder = f"{data_folder}/{scale_name}/permanent_water"
+            if scale_name == "basin":
+                print("Importing in all global rivers polygons...")
+                global_rivers = gpd.read_file(f"{global_folder}/global_rivers/HydroRIVERS_v10.shp")
+                global_rivers = global_rivers[global_rivers["ORD_CLAS"] == 1]
+                print("Import complete")
         global_grid = gpd.read_file(f"{global_folder}/global_permanent_water/global_grid_1x1_reduced.geojson")
         if not os.path.isdir(permanent_water_raster_folder):
             os.mkdir(permanent_water_raster_folder)
@@ -93,10 +98,13 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             seas_polygons = seas.iloc[list(seas.sindex.intersection(geometry))]
 
             # extract all water polygons from the intersecting permanent water grid tiles
-            grid_intersects = global_grid[global_grid.intersects(raster_extents["geometry"][index])]
-            grid_paths = [f"{global_folder}/global_permanent_water/{grid_id}.geojson" for grid_id in list(grid_intersects["grid_id"])]
-            grid_tiles = [gpd.read_file(grid_path) for grid_path in grid_paths if os.path.isfile(grid_path)]
-            water_polygons = pd.concat(grid_tiles).drop_duplicates("geometry") if grid_tiles else gpd.GeoDataFrame(columns=["geometry"])
+            if scale_name == "basin":
+                water_polygons = global_rivers[global_rivers.geometry.intersects(raster_extents["geometry"][index])]
+            else:
+                grid_intersects = global_grid[global_grid.intersects(raster_extents["geometry"][index])]
+                grid_paths = [f"{global_folder}/global_permanent_water/{grid_id}.geojson" for grid_id in list(grid_intersects["grid_id"])]
+                grid_tiles = [gpd.read_file(grid_path) for grid_path in grid_paths if os.path.isfile(grid_path)]
+                water_polygons = pd.concat(grid_tiles).drop_duplicates("geometry") if grid_tiles else gpd.GeoDataFrame(columns=["geometry"])
 
             # merge all sea and water polygons and then clip to the extent of the raster
             permanent_water = pd.concat([seas_polygons, water_polygons], ignore_index=True)[["geometry"]]
@@ -122,8 +130,12 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
                 height, width = 256, 256
 
             # rasterize the permanent water polygons and match to the cems label raster extent
-            gdal.Rasterize(f"{save_path}_utm.tif", save_path + ".geojson", 
-                        format="GTiff", xRes=10, yRes=10, burnValues=[1.0], outputBounds=utm_raster_extent)
+            if scale_name == "local":
+                gdal.Rasterize(f"{save_path}_utm.tif", save_path + ".geojson", 
+                            format="GTiff", xRes=10, yRes=10, burnValues=[1.0], outputBounds=utm_raster_extent)
+            else:
+                gdal.Rasterize(f"{save_path}_utm.tif", save_path + ".geojson", 
+                               format="GTiff", height=256, width=256, burnValues=[1.0], outputBounds=utm_raster_extent)
             gdal.Warp(f"{save_path}_wgs84.tif", f"{save_path}_utm.tif", 
                     srcSRS=permanent_water.crs, dstSRS="EPSG:4326", width=width, height=height, format="GTiff", outputBounds=wgs84_raster_extent,
                     resampleAlg="nearest", outputType=gdal.GDT_Byte, creationOptions=["COMPRESS=LZW"])

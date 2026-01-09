@@ -83,7 +83,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
             torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
             logger.info(f"Saved the model to: {model_save_path}")
 
-    plot_losses(losses, config_name, modelling_folder, rank, logger)
+            plot_losses(losses, config_name, modelling_folder, rank, logger)
 
     if ddp:
         cleanup()
