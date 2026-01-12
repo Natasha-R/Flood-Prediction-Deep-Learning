@@ -93,6 +93,7 @@ def plot_losses(losses, config_name, modelling_folder, rank, logger):
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
     ax.plot(range(1, len(losses["total_train_losses"])+1), losses["total_train_losses"], c="red", label="Train Loss", linewidth=2)
+    ax.plot(range(1, len(losses["total_train_local_losses"])+1), losses["total_train_local_losses"], "--", c="red", label="Train Local Loss", linewidth=2)
     other_loss_types = [other_loss_type for other_loss_type in losses.keys() if "train" not in other_loss_type and "epoch" not in other_loss_type]
     other_colours = ["deepskyblue", "blue", "darkblue"][:len(other_loss_types)]
     for other_loss_type, colour in zip(other_loss_types, other_colours):

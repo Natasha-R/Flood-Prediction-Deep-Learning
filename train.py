@@ -33,15 +33,18 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
     loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], total_steps=config["number_epochs"])
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
 
     losses = {f"total_{subset}_losses": [] for subset in subsets}
     losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
+    losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
+    losses.update({f"total_{subset}_local_losses": [] for subset in subsets})
 
     for epoch in range(1, config["number_epochs"]+1):
 
         epoch_start_time = time.time()
         losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
+        losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
         if ddp:
             data_loaders["train"].sampler.set_epoch(epoch)
 
@@ -53,10 +56,16 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
             model_output = model(data) #BclassesHW
             loss = 0.0
             for scale in config["scales"]:
-                loss = loss + config[f"{scale}_weight"] * loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                local_losses = 0
+                indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                loss = loss + config[f"{scale}_weight"] * indiv_loss
+                if scale == "local":
+                    local_losses += indiv_loss.item()
             loss.backward()
             optimizer.step()
             losses["epoch_train_losses"].append(loss.item())
+            losses["epoch_train_local_losses"].append(local_losses)
+            scheduler.step()
             
         model.eval()
         with torch.no_grad():
@@ -67,22 +76,27 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                     model_output = model(data)
                     loss = 0.0
                     for scale in config["scales"]:
-                        loss = loss + config[f"{scale}_weight"] * loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                        local_losses = 0
+                        indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                        loss = loss + config[f"{scale}_weight"] * indiv_loss
+                        if scale == "local":
+                            local_losses += indiv_loss.item()
                     losses[f"epoch_{validation_loader}_losses"].append(loss.item())
-
-        scheduler.step()
+                    losses[f"epoch_{validation_loader}_local_losses"].append(local_losses)
 
         loss_string = f"Rank: {rank} | Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
         for loss_type in subsets:
             losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
             loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
+            losses[f"total_{loss_type}_local_losses"].append(sum(losses[f"epoch_{loss_type}_local_losses"]) / len(losses[f"epoch_{loss_type}_local_losses"]))
+            loss_string += f" | {loss_type} local loss: {losses[f'total_{loss_type}_local_losses'][-1]:.3f}"
         logger.info(loss_string)
 
-        if config["save_model_on_epoch"] != 0 and ((epoch % config["save_model_on_epoch"]) == 0) and (rank==0):
-            model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
-            torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
-            logger.info(f"Saved the model to: {model_save_path}")
-
+        if config["save_model_on_epoch"] != 0 and ((epoch % config["save_model_on_epoch"]) == 0):
+            if rank == 0:
+                model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
+                torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
+                logger.info(f"Saved the model to: {model_save_path}")
             plot_losses(losses, config_name, modelling_folder, rank, logger)
 
     if ddp:
