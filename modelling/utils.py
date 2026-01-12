@@ -84,9 +84,12 @@ def load_model(config, rank, logger, ddp, pretrained_path=False):
         model = DDP(org_model, device_ids=[rank])
     else:
         model = org_model
-    device_name = [torch.cuda.get_device_name(device_id) for device_id in list(range(torch.cuda.device_count()))][int(rank)]
-    logger.info(f"Model loaded onto: {device_name} (rank {rank})")
-
+    if rank != "cpu":
+        device_name = [torch.cuda.get_device_name(device_id) for device_id in list(range(torch.cuda.device_count()))][rank]
+        logger.info(f"Model loaded onto: {device_name} (GPU {rank})")
+    else:
+        logger.info(f"Model loaded onto: CPU")
+    
     return model
 
 def find_num_channels(config):

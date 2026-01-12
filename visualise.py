@@ -124,6 +124,7 @@ if __name__ == "__main__":
     utils.check_paths(args)
     utils.check_cuda()
     logger = utils.get_logger()
+    args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
 
     visualise_predictions(config_path=args.config_path, epochs=args.epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
-                          device=int(args.gpu), logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch)
+                          device=args.gpu, logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch)

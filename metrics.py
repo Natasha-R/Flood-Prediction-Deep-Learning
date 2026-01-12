@@ -79,8 +79,9 @@ if __name__ == "__main__":
 
     config, config_name = utils.load_config(args.config_path, logger)
     num_epochs = args.epochs if args.epochs else config['number_epochs']
-    model = utils.load_model(config, rank=int(args.gpu), logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
+    args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
+    model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
     loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event)
 
     calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=config["number_epochs"], 
-                      logger=logger, device=int(args.gpu), subset=args.subset, subevent=args.subevent, event=args.event)
+                      logger=logger, device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event)

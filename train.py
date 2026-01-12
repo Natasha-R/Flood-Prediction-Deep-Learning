@@ -31,7 +31,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
     model = utils.load_model(config, rank, logger, ddp)
     subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
-    loss_function = torch.nn.CrossEntropyLoss(reduction="mean", ignore_index=0, size_average=True)
+    loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"]).to(rank), reduction="mean", ignore_index=0, size_average=True)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
 
@@ -84,7 +84,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                     losses[f"epoch_{validation_loader}_losses"].append(loss.item())
                     losses[f"epoch_{validation_loader}_local_losses"].append(local_losses)
 
-        loss_string = f"Rank: {rank} | Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
+        loss_string = f"GPU: {rank} | Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
         for loss_type in subsets:
             losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
             loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
@@ -107,15 +107,16 @@ if __name__ == "__main__":
     parser.add_argument('--config_path', required=True, help="The path to the configuration file to use.")
     parser.add_argument('--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
     parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
-    parser.add_argument('--gpu', default="ddp", help="Specify which gpu to train on. 'ddp' for parallel training, or '0', '1', etc.")
+    parser.add_argument('--gpu', default="ddp", help="Specify which gpu to train on. 'ddp' for parallel training, '0', '1' for a GPU, and 'cpu' for CPU.")
 
     args = parser.parse_args()
 
     utils.check_paths(args)
     utils.check_cuda()
+    args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
     
     world_size = torch.cuda.device_count()
     if args.gpu=="ddp":
         mp.spawn(train, args=(world_size, args.config_path, args.data_folder, args.modelling_folder, True), nprocs=world_size, join=True)
     else:
-        train(rank=int(args.gpu), world_size=world_size, config_path=args.config_path, data_folder=args.data_folder, modelling_folder=args.modelling_folder, ddp=False)
+        train(rank=args.gpu, world_size=world_size, config_path=args.config_path, data_folder=args.data_folder, modelling_folder=args.modelling_folder, ddp=False)

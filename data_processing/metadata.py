@@ -105,7 +105,7 @@ def create_empty_patch_csv(data_folder):
     patches.sort()
     events = [patch.split("_")[0] for patch in patches]
     subevents = ["_".join(patch.split("_")[:2]) for patch in patches]
-    subset = pd.DataFrame({"patch": patches, "event": events, "subevents": subevents})
+    subset = pd.DataFrame({"patch": patches, "event": events, "subevent": subevents})
     subset["subset"] = None
     subset.to_csv(f"{data_folder}/metadata/empty_data_subset.csv", index=False)
 
