@@ -9,6 +9,13 @@ import argparse
 from tqdm import tqdm
 from collections import defaultdict
 from torch.utils.data.distributed import DistributedSampler
+import numpy as np
+import random
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None):
      """
@@ -22,14 +29,17 @@ def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, eve
                batch_size=config["batch_size"],
                num_workers=config["number_workers"],
                shuffle=False,
-               sampler=DistributedSampler(dataset=dataset,
-                                          shuffle=True))
+               sampler=DistributedSampler(dataset=dataset, shuffle=True))
      else:
+          generator = torch.Generator()
+          generator.manual_seed(47)
           loader = torch.utils.data.DataLoader(dataset,
                                              batch_size=config["batch_size"],
                                              num_workers=config["number_workers"],
                                              shuffle=True,
-                                             pin_memory=True)
+                                             pin_memory=True,
+                                             worker_init_fn=seed_worker,
+                                             generator=generator,)
 
      return loader
 
@@ -48,11 +58,12 @@ class FloodDataset(torch.utils.data.Dataset):
           # subset the data patches based on a particular train/validation split, subevent, or event
           data_subset = pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")
           if subset:
-                data_subset = data_subset[data_subset["subset"]==subset]
+               data_subset = data_subset[data_subset["subset"]==subset]
           if subevent:
                data_subset = data_subset[data_subset["subevent"]==subevent]
           if event: 
                data_subset = data_subset[data_subset["event"]==event]
+          self.data_subset = data_subset
           self.patches = list(data_subset["patch"])
 
           self.transform = transforms.Compose([ToTensor(config),
@@ -110,6 +121,7 @@ class Normalize(object):
 
           self.config = config
           self.scales = self.config["scales"]
+          self.features = [feature for feature in config["features"] if feature not in ["soil_class", "land_cover"]]
 
           # import the metadata with the predefined shift and scale factors for each feature
           with open(f"{data_folder}/metadata/zscore.json") as file:
@@ -120,11 +132,11 @@ class Normalize(object):
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
                                        "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover"], 
                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1])}
-          self.non_transformed_features = ["permanent_water", "soil_class", "flow_direction", "land_cover"]
+          self.non_transformed_features = ["permanent_water", "soil_class", "land_cover"]
 
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           self.zscore_values = {}
-          self.features_to_transform = [feature for feature in config["features"] if not feature in self.non_transformed_features]
+          self.features_to_transform = [feature for feature in self.features if not feature in self.non_transformed_features]
           for feature in self.features_to_transform:
                self.zscore_values[feature] = {"shift": torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]]),
                                               "scale": torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])}
@@ -132,7 +144,8 @@ class Normalize(object):
           # find the location (index range) within the tensor for all of the classes
           self.feature_channels = {}
           open_slice = 0
-          for feature_name in config["features"]:
+          
+          for feature_name in self.features:
                number_channels = len(self.feature_indices[feature_name])
                self.feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
                open_slice += number_channels
@@ -153,13 +166,12 @@ class Normalize(object):
           elif feature == "precipitation":
                feature = torch.log(feature+1)
 
-          # scale the data using the predefined shift and scale factors, performing either z-normalisation or min-max normalization, and clip the data to -3/+3
           return torch.clamp((feature - self.zscore_values[feature_name]["shift"][:, None, None]) / self.zscore_values[feature_name]["scale"][:, None, None], min=-3, max=3)
           
      def __call__(self, data):
           
           # normalize the features
-          for feature_name in self.config["features"]:
+          for feature_name in self.features:
                for scale in self.scales:
                     channels = self.feature_channels[feature_name]
                     data[f"{scale}_features"][channels] = self.apply_normalization(feature_name, data[f"{scale}_features"][channels])
@@ -235,6 +247,9 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
           zscore["sentinel2"][band]["scale"] = zscore["sentinel2"][band]["max"]
      zscore["sentinel1"][2]["shift"] = 0
      zscore["sentinel1"][2]["scale"] = zscore["sentinel1"][2]["max"]
+     for band in [0, 1]:
+          zscore["flow_direction"][band]["shift"] = 0
+          zscore["flow_direction"][band]["scale"] = 10000
 
      # permanently save the values in a json file
      with open(f"{data_folder}/metadata/zscore.json", 'w') as file:
