@@ -25,13 +25,17 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
 
     if ddp:
         setup(rank, world_size)
+        torch.cuda.manual_seed_all(47)
+    else:
+        torch.manual_seed(47)
 
     logger = utils.get_logger()
     config, config_name = utils.load_config(config_path, logger)
     model = utils.load_model(config, rank, logger, ddp)
     subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
-    loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"]).to(rank), reduction="mean", ignore_index=0, size_average=True)
+    loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
+
     optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
 
@@ -55,8 +59,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                 data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
             model_output = model(data) #BclassesHW
             loss = 0.0
+            local_losses = 0.0
             for scale in config["scales"]:
-                local_losses = 0
                 indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
                 loss = loss + config[f"{scale}_weight"] * indiv_loss
                 if scale == "local":
@@ -75,8 +79,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                         data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
                     model_output = model(data)
                     loss = 0.0
+                    local_losses = 0.0
                     for scale in config["scales"]:
-                        local_losses = 0
                         indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
                         loss = loss + config[f"{scale}_weight"] * indiv_loss
                         if scale == "local":
@@ -104,10 +108,10 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the model.")
-    parser.add_argument('--config_path', required=True, help="The path to the configuration file to use.")
-    parser.add_argument('--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
-    parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
-    parser.add_argument('--gpu', default="ddp", help="Specify which gpu to train on. 'ddp' for parallel training, '0', '1' for a GPU, and 'cpu' for CPU.")
+    parser.add_argument('-c', '--config_path', required=True, help="The path to the configuration file to use.")
+    parser.add_argument('-d', '--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
+    parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
+    parser.add_argument('-g', '--gpu', default="ddp", help="Specify which gpu to train on. 'ddp' for parallel training, '0', '1' for a GPU, and 'cpu' for CPU.")
 
     args = parser.parse_args()
 

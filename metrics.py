@@ -61,15 +61,15 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise the model's predictions.")
-    parser.add_argument('--config_path', required=True, help="The path to the configuration file to use.")
-    parser.add_argument('--epochs', default=None, help="Load the model trained to the specified number of epochs.")
-    parser.add_argument('--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
-    parser.add_argument('--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
-    parser.add_argument('--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
+    parser.add_argument('-c', '--config_path', required=True, help="The path to the configuration file to use.")
+    parser.add_argument('-e', '--epochs', default=None, help="Load the model trained to the specified number of epochs.")
+    parser.add_argument('-d', '--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
+    parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
+    parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
-    parser.add_argument('--subset', default="val", help="Specify a data subset to calculate metrics on.")
-    parser.add_argument('--subevent', default=None, help="Specify a subevent to calculate metrics on.")
-    parser.add_argument('--event', default=None, help="Specify an event to calculate metrics on.")
+    parser.add_argument('-s', '--subset', default="val", help="Specify a data subset to calculate metrics on.")
+    parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
+    parser.add_argument('-e', '--event', default=None, help="Specify an event to calculate metrics on.")
     
     args = parser.parse_args()
 
