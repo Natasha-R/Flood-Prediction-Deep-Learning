@@ -140,7 +140,7 @@ def determine_data_split(data_folder):
     other_val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in other_val)]
 
     # determine the patches that will form the 'patch' validation and test sets
-    splitting = list(desc[(desc["event"].isin(["EMSR774", "EMSR773", "EMSR720", "EMSR561", "EMSR631", "EMSR692"])) & ~desc["event"].isin(subevent_test) & ~desc["event"].isin(subevent_val)]["subevent"])
+    splitting = list(desc[(desc["event"].isin(["EMSR774", "EMSR773", "EMSR720", "EMSR561", "EMSR631", "EMSR692"])) & ~desc["subevent"].isin(subevent_test) & ~desc["subevent"].isin(subevent_val)]["subevent"])
     patches_eval_patches = [patch for subevent in splitting for index, patch in enumerate([patch for patch in all_patches if subevent in patch]) if index % 2 == 0]
     patches_val_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 == 0]
     patches_test_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 != 0]

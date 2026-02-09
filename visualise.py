@@ -28,8 +28,8 @@ def visualise_predictions(config_path, epochs, data_folder, modelling_folder, de
         subevent = patch
 
     # define the colours for the visualisation
-    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 3: (22, 130, 184), 4:(124, 252, 0)}
-    matching_colours = {0: (0, 0, 0), 1: (202, 61, 23), 2: (35, 220, 71)}
+    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 3: (22, 130, 184), 4:(255, 251, 0), 5:(124, 252, 0)}
+    matching_colours = {0: (0, 0, 0), 1: (202, 61, 23), 2: (35, 220, 71), 4:(255, 251, 0), 5:(124, 252, 0)}
     all_patch_paths = []
 
     for patch_index in range(len(dataset)):
@@ -70,12 +70,16 @@ def visualise_predictions(config_path, epochs, data_folder, modelling_folder, de
     # mark a border around the val/test patches
     if test_border > 0:
         patch_subset = list(dataset.data_subset["subset"])
-        patch_geometries = gpd.GeoDataFrame(geometry=[box(*all_patches[index].bounds) for index in range(len(dataset)) if patch_subset[index] != "train"])
-        patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001).geoms
-        for geometry in patch_geometries:
-            mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=np.int8).astype(bool)
-            border_mask = (mask) & (~binary_erosion(mask, iterations=test_border))
-            full_subevent[0][border_mask] = 4
+        for other_subset, value in zip(["val", "test"], [4, 5]):
+            patch_geometries = gpd.GeoDataFrame(geometry=[box(*all_patches[index].bounds) for index in range(len(dataset)) if other_subset in patch_subset[index]])
+            if len(patch_geometries) > 0:
+                patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001)
+                patch_geometries = patch_geometries.geoms if patch_geometries.geom_type == "MultiPolygon" else [patch_geometries]
+                for geometry in patch_geometries:
+                    mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=np.int8).astype(bool)
+                    border_mask = (mask) & (~binary_erosion(mask, iterations=test_border))
+                    for band in range(3):
+                        full_subevent[band][border_mask] = value
 
     # save the visualisation as geotiff, with predicted, ground truth label, and matching bands
     if file_type == "geotiff":
@@ -112,19 +116,27 @@ def plot_losses(losses, config_name, modelling_folder, rank, logger):
     Plot the train and validation losses from model training.
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
-    ax.plot(range(1, len(losses["total_train_losses"])+1), losses["total_train_losses"], c="red", label="Train Loss", linewidth=2)
-    ax.plot(range(1, len(losses["total_train_local_losses"])+1), losses["total_train_local_losses"], "--", c="red", label="Train Local Loss", linewidth=2)
-    other_loss_types = [other_loss_type for other_loss_type in losses.keys() if "train" not in other_loss_type and "epoch" not in other_loss_type]
-    other_colours = ["deepskyblue", "blue", "darkblue"][:len(other_loss_types)]
-    for other_loss_type, colour in zip(other_loss_types, other_colours):
-        ax.plot(range(1, len(losses[other_loss_type])+1), losses[other_loss_type], "--" if "local" in other_loss_type else "-", c=colour, linewidth=2,
-                label=" ".join(other_loss_type.split("_")[1:-1]).title() + " Loss", )
+
+    loss_types = ["total_train_losses"] + [loss_type for loss_type in losses.keys() if "train" not in loss_type and "epoch" not in loss_type and "local" not in loss_type]
+    colours = ["red", "deepskyblue", "blue", "darkblue", "royalblue"][:len(loss_types)]
+
+    for loss_type, colour in zip(loss_types, colours):
+        local_loss_type = "_".join(loss_type.split("_")[:-1]) + "_local_losses"
+        for loss_name, line in zip([loss_type, local_loss_type], ["-", "--"]):
+            ax.plot(range(1, len(losses[loss_name])+1), losses[loss_name], line, c=colour, linewidth=2, label=" ".join(loss_name.split("_")[1:-1]).title() + " Loss")
+
     ax.set_title(f"Train and Validation Losses (GPU {rank})", fontsize=15)
     ax.legend(fontsize=14), ax.grid(alpha=0.4)
     ax.tick_params(axis="both", which="major", labelsize=14)
     ax.set_xlabel("Epoch", fontsize=14), ax.set_ylabel("Loss", fontsize=14)
+    
+    # fig.tight_layout()
+    # fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}.png", bbox_inches="tight")
+    # logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
+
+    ax.set_ylim(0, 1)
     fig.tight_layout()
-    fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}.png", bbox_inches="tight")
+    fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}_01.png", bbox_inches="tight")
     logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
 
 if __name__ == "__main__":
