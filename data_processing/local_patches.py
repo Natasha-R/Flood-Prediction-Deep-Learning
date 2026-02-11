@@ -7,10 +7,7 @@ import json
 from tqdm import tqdm
 import os
 import argparse
-import warnings
 import pandas as pd
-import shapely
-from shapely.geometry import box
 gdal.UseExceptions()
 pd.options.mode.chained_assignment = None
 

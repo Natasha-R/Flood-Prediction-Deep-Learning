@@ -2,7 +2,6 @@ import geopandas as gpd
 import os
 from tqdm import tqdm
 import rasterio
-from rasterio.merge import merge
 from osgeo import gdal
 import numpy as np
 import shapely

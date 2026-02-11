@@ -9,7 +9,6 @@ from rasterio.enums import Resampling
 import numpy as np
 import time
 import argparse
-import datetime
 import shapely
 from tqdm import tqdm
 

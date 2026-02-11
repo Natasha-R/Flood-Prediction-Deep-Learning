@@ -6,7 +6,7 @@ from tqdm import tqdm
 import time
 import os
 import shapely
-from shapely.geometry import shape, box
+from shapely.geometry import box
 import rasterio
 import numpy as np
 from osgeo import gdal
