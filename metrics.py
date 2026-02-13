@@ -78,7 +78,7 @@ if __name__ == "__main__":
     logger = utils.get_logger()
 
     config, config_name = utils.load_config(args.config_path, logger)
-    config["batch_size"] = 8
+    config["batch_size"] = 4
     num_epochs = args.epochs if args.epochs else config['number_epochs']
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
     model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")

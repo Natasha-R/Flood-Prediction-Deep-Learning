@@ -2,7 +2,6 @@ import logging
 import torch
 import os
 import yaml
-import torch.nn as nn
 import sys
 import modelling.architectures as architectures
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -65,12 +64,8 @@ def load_model(config, rank, logger, ddp, pretrained_path=False):
         org_model = architectures.BasicUNet(config)
     elif config["architecture"].lower()=="chainedunet":
         org_model = architectures.ChainedUNet(config)
-    elif config["architecture"].lower()=="fusedunet":
-        org_model = architectures.FusedUNet(config)
-    elif config["architecture"].lower()=="fusedbranchedunet":
-        org_model = architectures.FusedBranchedUNet(config)
-    elif config["architecture"].lower()=="multifusedbranchedunet":
-        org_model = architectures.MultiFusedBranchedUNet(config)
+    elif config["architecture"].lower()=="branchedunet":
+        org_model = architectures.BranchedUNet(config)
     else:
         raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 
