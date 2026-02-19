@@ -84,5 +84,5 @@ if __name__ == "__main__":
     model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
     loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event)
 
-    calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=config["number_epochs"], 
+    calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
                       logger=logger, device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event)

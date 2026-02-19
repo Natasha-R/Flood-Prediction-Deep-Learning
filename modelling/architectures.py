@@ -98,12 +98,12 @@ class CrossScaleAttention(nn.Module):
         B, C, H, W = query.shape
         query = self.query_conv(torch.cat([query, self.positional_encoding.expand(B, 2, H, W)], dim=1))
         key = self.key_conv(torch.cat([key, self.positional_encoding.expand(B, 2, H, W)], dim=1))
-        query = query.flatten(2).transpose(1, 2)
-        key = key.flatten(2).transpose(1, 2)
+        query = query.flatten(2).transpose(1, 2).contiguous()
+        key = key.flatten(2).transpose(1, 2).contiguous()
         attended, _ = self.cross_attention(query=query, key=key, value=key)
         attended = query + attended
         attended = self.norm(attended)
-        attended = attended.transpose(1, 2).reshape(B, C, H, W)
+        attended = attended.transpose(1, 2).contiguous().reshape(B, C, H, W)
         attended = self.conv(attended)
         attended = self.relu(attended)
         return attended

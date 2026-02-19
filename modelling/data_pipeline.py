@@ -56,7 +56,7 @@ class FloodDataset(torch.utils.data.Dataset):
           self.class_features_exist = config["class_features_exist"]
 
           # subset the data patches based on a particular train/validation split, subevent, or event
-          data_subset = pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")
+          data_subset = pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")
           if subset:
                data_subset = data_subset[data_subset["subset"]==subset]
           if subevent:
@@ -158,7 +158,7 @@ class Normalize(object):
           
           # apply log to features that need to be transformed
           if feature_name == "dem":
-               feature = torch.log(feature + 200)
+               feature = torch.log(torch.clamp(feature, min=-199, max=None) + 200)
           elif feature_name == "sentinel2":
                feature += 2
                for band in [0, 1, 2, 9]:

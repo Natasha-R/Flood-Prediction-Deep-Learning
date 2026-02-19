@@ -37,7 +37,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
     loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
 
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
+    optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
 
     losses = {f"total_{subset}_losses": [] for subset in subsets}
@@ -102,7 +102,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                 model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
                 torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
                 logger.info(f"Saved the model to: {model_save_path}")
-                plot_losses(losses, config_name, modelling_folder, rank, logger)
+                plot_losses(losses, config, config_name, modelling_folder, rank, logger)
 
     if ddp:
         cleanup()

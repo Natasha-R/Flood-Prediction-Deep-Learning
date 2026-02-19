@@ -111,18 +111,18 @@ def visualise_predictions(config_path, epochs, data_folder, modelling_folder, de
 
     logger.info(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
-def plot_losses(losses, config_name, modelling_folder, rank, logger):
+def plot_losses(losses, config, config_name, modelling_folder, rank, logger):
     """
     Plot the train and validation losses from model training.
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
-
+    multi_scale = True if len(config["scales"]) > 1 else False
     loss_types = ["total_train_losses"] + [loss_type for loss_type in losses.keys() if "train" not in loss_type and "epoch" not in loss_type and "local" not in loss_type]
     colours = ["red", "deepskyblue", "blue", "darkblue", "royalblue"][:len(loss_types)]
 
     for loss_type, colour in zip(loss_types, colours):
         local_loss_type = "_".join(loss_type.split("_")[:-1]) + "_local_losses"
-        for loss_name, line in zip([loss_type, local_loss_type], ["-", "--"]):
+        for loss_name, line in zip(*([loss_type, local_loss_type], ["-", "--"]) if multi_scale else ([local_loss_type], ["--"])):
             ax.plot(range(1, len(losses[loss_name])+1), losses[loss_name], line, c=colour, linewidth=2, label=" ".join(loss_name.split("_")[1:-1]).title() + " Loss")
 
     ax.set_title(f"Train and Validation Losses (GPU {rank})", fontsize=15)
@@ -130,14 +130,14 @@ def plot_losses(losses, config_name, modelling_folder, rank, logger):
     ax.tick_params(axis="both", which="major", labelsize=14)
     ax.set_xlabel("Epoch", fontsize=14), ax.set_ylabel("Loss", fontsize=14)
     
-    # fig.tight_layout()
-    # fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}.png", bbox_inches="tight")
-    # logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
+    fig.tight_layout()
+    fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}.png", bbox_inches="tight")
+    logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
 
     ax.set_ylim(0, 1)
     fig.tight_layout()
-    fig.savefig(f"{modelling_folder}/losses/{config_name}_gpu{rank}_01.png", bbox_inches="tight")
-    logger.info(f"Saved loss plot to: {modelling_folder}/losses/{config_name}_gpu{rank}.png")
+    fig.savefig(f"{modelling_folder}/losses/01_{config_name}_gpu{rank}.png", bbox_inches="tight")
+    logger.info(f"Saved loss plot to: {modelling_folder}/losses/01_{config_name}_gpu{rank}.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise the model's predictions.")
