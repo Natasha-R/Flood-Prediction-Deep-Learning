@@ -13,13 +13,10 @@ from scipy.ndimage import binary_erosion
 from shapely.geometry import box
 import geopandas as gpd
 
-def visualise_predictions(config_path, epochs, data_folder, modelling_folder, device, logger, subevent, file_type, scale, patch, pred_only, test_border):
+def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, logger, subevent, file_type, scale, patch, pred_only, test_border, permute_features=None):
 
-    # load the config, model, and dataset
-    config, config_name = utils.load_config(config_path, logger)
-    num_epochs = epochs if epochs else config['number_epochs']
-    model = utils.load_model(config, device, logger, ddp=False, pretrained_path=f"{modelling_folder}/models/{config_name}_{num_epochs}.pth")
-    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent)
+    # load the dataset
+    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, permute_features=permute_features)
     
     if patch:
         if patch[-4:] != ".tif":
@@ -161,6 +158,10 @@ if __name__ == "__main__":
     logger = utils.get_logger()
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
 
-    visualise_predictions(config_path=args.config_path, epochs=args.epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
+    config, config_name = utils.load_config(args.config_path, logger)
+    num_epochs = args.epochs if args.epochs else config['number_epochs']
+    model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
+
+    visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
                           device=args.gpu, logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
                           pred_only=args.pred_only, test_border=int(args.test_border))

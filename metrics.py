@@ -8,7 +8,7 @@ import pandas as pd
 import os
 from collections import defaultdict
 
-def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset="val_other", subevent=None, event=None):
+def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset=None, subevent=None, event=None):
 
     # define the metrics functions
     class_f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
-    parser.add_argument('-s', '--subset', default="val", help="Specify a data subset to calculate metrics on.")
+    parser.add_argument('-s', '--subset', default=None, help="Specify a data subset to calculate metrics on.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
     parser.add_argument('-v', '--event', default=None, help="Specify an event to calculate metrics on.")
     
@@ -79,6 +79,7 @@ if __name__ == "__main__":
 
     config, config_name = utils.load_config(args.config_path, logger)
     config["batch_size"] = 4
+    config["permute_features"] = None
     num_epochs = args.epochs if args.epochs else config['number_epochs']
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
     model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")

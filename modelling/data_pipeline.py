@@ -17,11 +17,11 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None):
+def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, permute_features=None):
      """
      Create a dataloader for a particular data subset, subevent or event.
      """
-     dataset = FloodDataset(config=config, data_folder=data_folder, subset=subset, subevent=subevent, event=event)
+     dataset = FloodDataset(config, data_folder, subset, subevent, event, permute_features)
 
      if ddp: 
                loader = torch.utils.data.DataLoader(
@@ -47,7 +47,7 @@ class FloodDataset(torch.utils.data.Dataset):
      """
      The dataset for the flood data.
      """
-     def __init__(self, config, data_folder, subset=None, subevent=None, event=None):
+     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, permute_features=None):
           
           self.config = config
           self.data_folder = data_folder
@@ -67,7 +67,8 @@ class FloodDataset(torch.utils.data.Dataset):
           self.patches = list(data_subset["patch"])
 
           self.transform = transforms.Compose([ToTensor(config),
-                                               Normalize(config, data_folder)])
+                                               Normalize(config, data_folder),
+                                               PermuteFeatures(config, permute_features)])
 
      def __len__(self):
           return len(self.patches)
@@ -177,7 +178,54 @@ class Normalize(object):
                     data[f"{scale}_features"][channels] = self.apply_normalization(feature_name, data[f"{scale}_features"][channels])
 
           return data
-     
+
+class PermuteFeatures(object):
+
+     def __init__(self, config, permute_features):
+
+          self.config = config
+          self.scales = self.config["scales"]
+          self.features = [feature for feature in config["features"] if feature not in ["soil_class", "land_cover"]]
+          self.class_features = [feature for feature in config["features"] if feature in ["soil_class", "land_cover"]]
+          self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
+                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
+                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover"], 
+                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1])}
+          self.permute_features = permute_features
+
+          self.feature_channels, self.class_feature_channels = {}, {}
+          for feature_group, feature_channels in zip([self.features, self.class_features], [self.feature_channels, self.class_feature_channels]):
+               open_slice = 0
+               for feature_name in feature_group:
+                    number_channels = len(self.feature_indices[feature_name])
+                    feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
+                    open_slice += number_channels
+
+     def __call__(self, data):
+
+          if self.permute_features:
+               for scale in self.permute_features:
+                    for feature_name in self.permute_features[scale]:
+
+                         if feature_name in self.feature_channels:
+                              feature_channels = self.feature_channels
+                              key = "features"
+                         else: # if feature name is a class feature
+                              feature_channels = self.class_feature_channels
+                              key = "classes"
+
+                         channels = feature_channels[feature_name]
+
+                         for channel in range(data[f"{scale}_{key}"][channels].shape[0]):
+                              if self.config["zero_out"]:
+                                   data[f"{scale}_{key}"][channels][channel, :, :] = 0
+                              else:
+                                   data[f"{scale}_{key}"][channels][channel, :, :] = data[f"{scale}_{key}"][channels][channel, :, :].view(-1)[torch.randperm(256*256)].view(1, 256, 256) 
+               return data
+          
+          else:
+               return data
+
 def normalize(data_folder=os.environ["DATA_FOLDER"]):
      """
      A function to be run before model training, to calculate the shift and scale values for normalizing the data.

@@ -32,7 +32,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
     logger = utils.get_logger()
     config, config_name = utils.load_config(config_path, logger)
     model = utils.load_model(config, rank, logger, ddp)
-    subsets = list(pd.read_csv(f"{data_folder}/metadata/{config['data_subset_file']}.csv")["subset"].unique())
+    subsets = list(pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")["subset"].unique())
     subsets = [subset for subset in subsets if "test" not in subset]
     data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
     loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
