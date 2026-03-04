@@ -8,7 +8,7 @@ import pandas as pd
 import os
 from collections import defaultdict
 
-def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset=None, subevent=None, event=None):
+def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset=None, subevent=None, event=None, patch=None):
 
     # define the metrics functions
     class_f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
@@ -40,7 +40,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
         class_names = ["flood", "no_flood"]
         class_indices = [2, 1]
 
-    dataset_subset = "_".join([filter_type for filter_type in [subset, subevent, event] if filter_type])
+    dataset_subset = "_".join([filter_type for filter_type in [subset, subevent, event, patch] if filter_type])
     metrics = {"config_name": [config_name], "epoch": [epoch], "dataset_subset": [dataset_subset]}
     metrics.update({key: [str(value)] for key, value in config.items()})
 
@@ -70,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--subset', default=None, help="Specify a data subset to calculate metrics on.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
     parser.add_argument('-v', '--event', default=None, help="Specify an event to calculate metrics on.")
+    parser.add_argument('-p', '--patch', default=None, help="Specify a patch to calculate metrics on.")
     
     args = parser.parse_args()
 
@@ -79,11 +80,10 @@ if __name__ == "__main__":
 
     config, config_name = utils.load_config(args.config_path, logger)
     config["batch_size"] = 4
-    config["permute_features"] = None
     num_epochs = args.epochs if args.epochs else config['number_epochs']
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
     model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
-    loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event)
+    loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)
 
     calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
-                      logger=logger, device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event)
+                      logger=logger, device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)

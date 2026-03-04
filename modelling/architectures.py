@@ -344,8 +344,6 @@ class BranchedUNet(nn.Module):
             self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
             self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
             self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
-            if "context" not in self.scales:
-                self.local_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
 
         if "context" in self.scales:
             self.context_down_convs = []
@@ -364,7 +362,6 @@ class BranchedUNet(nn.Module):
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
             self.context_up_convs = nn.ModuleList(self.context_up_convs)
             self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
-            self.local_attends_context = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
             if "basin" in self.scales:
                 self.context_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
                 
@@ -384,6 +381,7 @@ class BranchedUNet(nn.Module):
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.local_up_convs = nn.ModuleList(self.local_up_convs)
         self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
+        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
 
     def forward(self, data):
 
@@ -424,11 +422,11 @@ class BranchedUNet(nn.Module):
         if "basin" in self.scales:
             if "context" in self.scales:
                 context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
-                local_attended_higher = self.local_attends_context(final_features["local"], context_attended_basin)
+                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
             else:
-                local_attended_higher = self.local_attends_basin(final_features["local"], final_features["basin"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
         else:
-            local_attended_higher = self.local_attends_context(final_features["local"], final_features["context"])
+            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
 
         if "basin" in self.scales:
             x = final_features["basin"]

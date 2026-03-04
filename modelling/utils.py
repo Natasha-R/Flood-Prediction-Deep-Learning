@@ -93,3 +93,10 @@ def find_num_channels(config):
                                 "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2}
     in_channels = sum([channels_in_features[feature] for feature in config["features"]])
     return in_channels
+
+def mask_to_string(mask_desc):
+    mask_desc = str(mask_desc)
+    for punctuation in ["'", "{", "}", " ", "_", ":"]:
+        mask_desc = mask_desc.replace(punctuation, "")
+    mask_desc = mask_desc.replace(",", "_")
+    return mask_desc

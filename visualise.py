@@ -13,16 +13,12 @@ from scipy.ndimage import binary_erosion
 from shapely.geometry import box
 import geopandas as gpd
 
-def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, logger, subevent, file_type, scale, patch, pred_only, test_border, permute_features=None):
+def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, logger, subevent, file_type, 
+                          scale, patch, pred_only, test_border, mask_features=None, mask_patch=None):
 
     # load the dataset
-    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, permute_features=permute_features)
-    
-    if patch:
-        if patch[-4:] != ".tif":
-            patch = patch + ".tif"
-        dataset.patches = [patch]
-        subevent = patch
+    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_patch=mask_patch)
+    if patch: subevent=patch
 
     # define the colours for the visualisation
     label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 3: (22, 130, 184), 4:(255, 251, 0), 5:(124, 252, 0)}
