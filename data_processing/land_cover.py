@@ -25,7 +25,7 @@ def create_land_cover_rasters(data_folder, global_folder, scale):
     if not os.path.isdir(land_cover_folder):
         os.mkdir(land_cover_folder)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), f"Create land cover rasters for {scale} scale"):
         
         # read in the metadata for the subevent raster
         subevent = raster_extents["subevent"][index]

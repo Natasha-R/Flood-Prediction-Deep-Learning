@@ -29,7 +29,7 @@ def download_soil_moisture_data(data_folder, global_folder):
     if not os.path.isdir(global_soil_moisture_folder):
         os.mkdir(global_soil_moisture_folder)
 
-    for date in tqdm(all_dates):
+    for date in tqdm(all_dates, desc="Download soil moisture data"):
 
         date = date.date()
         if (os.path.isfile(f"{global_soil_moisture_folder}/{date}_sm_surface_global.tif") 
@@ -37,7 +37,6 @@ def download_soil_moisture_data(data_folder, global_folder):
             continue
 
         # download the soil moisture data from the NASA Earth Science Data API
-        print("\n", "\n", f"{global_soil_moisture_folder}/{date}.tif", flush=True)
         response = earthaccess.search_data(
             short_name="SPL4SMGP",
             temporal=(f"{date}T12:00:00Z", f"{date}T15:00:00Z", True),
@@ -79,7 +78,7 @@ def create_soil_moisture_rasters(data_folder, global_folder, scale):
     raster_extents["one_day"] = raster_extents["date"] - pd.Timedelta(days=1)
     raster_extents["one_week"] = raster_extents["date"] - pd.Timedelta(days=7)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc=f"Create soil moisture rasters for {scale} scale"):
 
         # extract data for both one day previous to the subevent, and one week before
         for time_frame in ["one_day", "one_week"]:

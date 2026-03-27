@@ -83,7 +83,7 @@ def create_cems_geojson(data_folder):
         
     all_events = [event_code for event_code in os.listdir(cems_path) if "EMSR" in event_code]
 
-    for event_code in tqdm(all_events):
+    for event_code in tqdm(all_events, desc="Process flood events"):
 
         processed_obs = []
         event_path = os.path.join(cems_path, event_code)
@@ -173,7 +173,7 @@ def create_cems_raster(data_folder):
     geojson_folder = f"{data_folder}/full_subevent/geojson_cems/"
     all_geojson = [os.path.join(root, file) for root, dirs, files in os.walk(geojson_folder) for file in files if file.endswith(".geojson")]
 
-    for geojson_path in tqdm(all_geojson):
+    for geojson_path in tqdm(all_geojson, desc="Create CEMS rasters"):
 
         subevent = geojson_path.split("/")[-1].split(".")[0]
         geojson = gpd.read_file(geojson_path)
@@ -192,7 +192,7 @@ def combine_cems_and_permanent_water(data_folder):
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc="Combine CEMS and permanent water"):
         
         # load in the rasters
         subevent = raster_extents["subevent"][index]
@@ -226,7 +226,7 @@ def create_label_scales(data_folder, scale):
     if not os.path.isdir(save_folder):
         os.mkdir(save_folder)
 
-    for index in tqdm(range(len(scales))):
+    for index in tqdm(range(len(scales)), desc=f"Create {scale} labels"):
 
         # save the label as a raster at the given scale
         gdal.Warp(f"{save_folder}/{scales['patch'].iloc[index]}", f"{data_folder}/full_subevent/raster_label/{scales['subevent'][index]}.tif",

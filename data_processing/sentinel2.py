@@ -52,7 +52,7 @@ def find_sentinel2_availability(data_folder, scale):
 
     # get metadata on available sentinel 2 data with its id, time, and cloud cover for the given event and date
     availability = []
-    for index in tqdm(range(len(aois))):
+    for index in tqdm(range(len(aois)), desc=f"Find Sentinel 2 availability at {scale} scale"):
 
         search_iterator = catalog.search(
             DataCollection.SENTINEL2_L2A,
@@ -101,7 +101,7 @@ def find_minimal_cloud_cover(data_folder, scale):
 
     # find the optimal date for Sentinel 2 data for each aoi, based on the cloud cover percentages
     cloud_cover_availability = {"geometry_event_date_id":[], "aoi_group": [], "availability_date":[], "cloud_cover_percentage":[]}
-    for geometry_event_date_id, data in tqdm(availability.groupby("geometry_event_date_id")):
+    for geometry_event_date_id, data in tqdm(availability.groupby("geometry_event_date_id"), desc=f"Find optimal cloud cover from availability metadata at {scale} scale"):
 
         # only use dates for which data is available within the entire aoi
         coverage_by_date = data.groupby(["tile_date"])["tile_geometry"].apply(lambda row : unary_union(wkt.loads(row)).convex_hull)
@@ -192,11 +192,10 @@ def download_sentinel2(data_folder, scale):
         os.mkdir(sentinel2_folder)
     resolution = {"local":10, "context":100, "basin":1000}[scale]
 
-    for index in tqdm(range(len(aois))):
+    for index in tqdm(range(len(aois)), desc=f"Download Sentinel 2 data for {scale} scale"):
 
         save_data_folder = f"{sentinel2_folder}/aoi_{aois.loc[index, 'geometry_event_date_id']}/group_{aois.loc[index, 'aoi_group']}/"
         if not os.path.isdir(save_data_folder):
-            print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
             geometry = Geometry(aois.loc[index, "geometry"], CRS.WGS84)
@@ -227,7 +226,7 @@ def download_sentinel2(data_folder, scale):
                     geometry_correctly_sized = True
 
             # extract the sentinel 2 bands and save as a GeoTiff in UINT16
-            for bbox in tqdm(split_aois, leave=False):
+            for bbox in split_aois:
                 bbox_size = bbox_to_dimensions(bbox, resolution=resolution)
                 request = SentinelHubRequest(
                     evalscript="""
@@ -275,7 +274,7 @@ def set_sentinel2_nodata(data_folder, scale):
     else:
         sentinel2_folder = f"{data_folder}/{scale}/download_sentinel2"
     all_responses = [os.path.join(root, file) for root, dirs, files in os.walk(sentinel2_folder) for file in files if file.endswith(".tiff")]
-    for response_path in tqdm(all_responses):
+    for response_path in all_responses:
             gdal.PushErrorHandler('CPLQuietErrorHandler')
             gdal.Translate(destName=response_path[:-5] + "_temp.tiff", srcDS=response_path, noData=0, creationOptions=["COMPRESS=LZW"])
             gdal.PopErrorHandler()
@@ -307,7 +306,7 @@ def create_sentinel2_rasters(data_folder, scale):
     if not os.path.isdir(sentinel2_raster_folder):
         os.mkdir(sentinel2_raster_folder)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc=f"Create Sentinel 2 rasters for {scale} scale"):
 
         # extract the metadata
         subevent = raster_extents["subevent"][index]

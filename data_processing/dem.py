@@ -26,7 +26,7 @@ def extract_dem_aoi(data_folder, global_folder):
     if not os.path.isdir(dem_aoi_folder):
         os.mkdir(dem_aoi_folder)
 
-    for idx in tqdm(range(len(aois))):
+    for idx in tqdm(range(len(aois)), desc="Extract DEM data from FABDEM"):
 
         # extract which DEM tiles are covered by the aoi polygon
         geometry = aois.loc[idx, "geometry"]
@@ -84,7 +84,7 @@ def create_dem_rasters(data_folder):
     if not os.path.isdir(dem_raster_folder):
         os.mkdir(dem_raster_folder)
 
-    for subevent, data in tqdm(aois.groupby("subevent")):
+    for subevent, data in tqdm(aois.groupby("subevent"), desc="Create DEM rasters"):
 
         # determine which DEM AOIs need to be combined, and the final extent of the raster
         dem_files = list(data["geometry_id"].apply(lambda row: f"{dem_aoi_folder}/dem_{row}.tif"))
@@ -113,7 +113,7 @@ def create_dem_scales(data_folder, global_folder, scale):
     if not os.path.isdir(dem_folder):
         os.mkdir(dem_folder)
 
-    for index in tqdm(range(len(scales))):
+    for index in tqdm(range(len(scales)), desc=f"Create DEM rasters for {scale} scale"):
 
         # import the metadata for the patch
         height = int(scales["height"].iloc[index])

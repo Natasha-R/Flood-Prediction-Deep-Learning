@@ -27,7 +27,7 @@ def create_flow_accumulation(data_folder, global_folder, scale):
     if not os.path.isdir(flow_acc_folder):
         os.mkdir(flow_acc_folder)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc=f"Create flow accumulation raster for {scale} scale"):
 
         # import the metadata for the current raster
         bounds = raster_extents["geometry"][index].bounds

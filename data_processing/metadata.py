@@ -24,7 +24,7 @@ def create_aoi_metadata(data_folder):
 
     # find the path to each aoi, and create a dataframe containing its extent
     aoi_paths = [os.path.join(root, file) for root, dirs, files in os.walk(cems_geojson_folder) for file in files]
-    for aoi_path in tqdm(aoi_paths):
+    for aoi_path in tqdm(aoi_paths, desc="Build metadata on each aoi"):
         aoi = gpd.read_file(aoi_path).to_crs(epsg=4326)
         aoi = aoi[aoi["raster_value"]==1]
         aoi["event"] = aoi_path.split("/")[-1].split(".")[0].split("_")[0]
@@ -83,7 +83,7 @@ def create_raster_metadata(data_folder):
 
     # find the path to each raster, and create a dataframe containing its extent
     all_paths = [os.path.join(root, file) for root, dirs, files in os.walk(cems_raster_folder) for file in files]
-    for raster_path in tqdm(all_paths):
+    for raster_path in tqdm(all_paths, desc="Build metadata on each raster"):
         extent_dict["event"].append(raster_path.split("/")[-1].split(".")[0].split("_")[0])
         extent_dict["subevent"].append(raster_path.split("/")[-1].split(".")[0])
         extent_dict["date"].append(raster_path.split("/")[-1].split(".")[0].split("_")[-1])
@@ -113,55 +113,55 @@ def determine_data_split(data_folder):
     """
     Create metadata describing the main split of the dataset into train, validation and test subsets.
     """
-    # read in the metadata
-    desc = pd.read_csv(f"{data_folder}/metadata/subevent_descriptions.csv")
+    # get all of the available patches
     all_patches = os.listdir(f"{data_folder}/local/label")
     all_patches.sort()
 
-    # determine the patches that will form the 'subevent' validation and test sets
-    subevent_test = ["EMSR561_2022-01-29", "EMSR561_2022-02-01", "EMSR631_2022-09-11", "EMSR631_2022-09-23", 
-                    "EMSR692_2023-09-07", "EMSR692_2023-09-10", "EMSR692_2023-09-12", "EMSR692_2023-09-22",
-                    "EMSR720_2024-05-05", "EMSR720_2024-05-07", "EMSR720_2024-05-15", "EMSR773_2024-10-31", 
-                    "EMSR773_2024-11-03", "EMSR773_2024-11-10", "EMSR773_2024-11-18", "EMSR774_2024-10-30", 
-                    "EMSR774_2024-11-03", "EMSR774_2024-11-05", "EMSR774_2024-11-08"]
-    subevent_val = ["EMSR692_2023-09-15", "EMSR692_2023-09-18", "EMSR773_2024-11-06", "EMSR773_2024-11-15"]
-    subevent_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in subevent_test)]
-    subevent_val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in subevent_val)]
+    # define the patches used for the validation and test subsets
+    patch_subsets = {"val_patches": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR465_2020-09-24", "EMSR517_2021-07-18", "EMSR634_2022-09-18"])][1::2],
+                    "val_del_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR788_2025-02-04"])],
+                    "test_del_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR763_2024-10-07"])],
+                    "val_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR770_2024-10-08"])],
+                    "val_other": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR764_2024-09-23"])],
+                    "test_timing": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR664_2023-05-21"])],
+                    }
+    eval_patches = [patch for patch_subset in patch_subsets.values() for patch in patch_subset]
 
-    # determine the patches that will form the 'timing' test set
-    timing_test = ["EMSR555", "EMSR762", "EMSR637", "EMSR429", "EMSR768"]
-    timing_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in timing_test)]
+    # exclude patches that are in subevents associated with the validation and test data, to prevent bias
+    excluded = ["EMSR388_2019-09-18", # temporarily excluded while sentinel-2 data is unavailable
+                "EMSR664_2023-05-17", "EMSR664_2023-05-18", "EMSR664_2023-05-20", "EMSR664_2023-05-22", # excluded from timing
+                "EMSR465_2020-09-20", "EMSR517_2021-07-15", "EMSR517_2021-07-16", "EMSR517_2021-07-20", "EMSR517_2021-07-21" # excluded from patches
+                "EMSR634_2022-09-16", "EMSR764_2024-09-30", # excluded from other
+                "EMSR788_2025-02-05"] # excluded from del subevent due to bad annotation
+    all_patches = [patch for patch in all_patches if not any(subevent in patch for subevent in excluded)]
 
-    # determine the patches that will form the 'other' test and validation sets
-    other_test = ["EMSR754", "EMSR779", "EMSR788", "EMSR570", "EMSR763", "EMSR764", "EMSR759", 
-                "EMSR756", "EMSR706", "EMSR758", "EMSR722", "EMSR431", "EMSR650"]
-    other_val = ["EMSR487", "EMSR663", "EMSR694"]
-    other_test_patches = [patch for patch in all_patches if any(subevent in patch for subevent in other_test)]
-    other_val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in other_val)]
+    # include only events that are in Europe and which were not caused by snow melt
+    # comment out to include all events within the training data
+    events = pd.read_csv(f"{data_folder}/metadata/subevent_descriptions.csv")
+    events = events[events["continent"]=="Europe"]
+    events = events[events["flood_cause"] != "snow_melt"]
+    included_events = set(events["event"])
+    all_patches = [patch for patch in all_patches if any(subevent in patch for subevent in included_events)]
 
-    # determine the patches that will form the 'patch' validation and test sets
-    splitting = list(desc[(desc["event"].isin(["EMSR774", "EMSR773", "EMSR720", "EMSR561", "EMSR631", "EMSR692"])) & ~desc["subevent"].isin(subevent_test) & ~desc["subevent"].isin(subevent_val)]["subevent"])
-    patches_eval_patches = [patch for subevent in splitting for index, patch in enumerate([patch for patch in all_patches if subevent in patch]) if index % 2 == 0]
-    patches_val_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 == 0]
-    patches_test_patches = [patch for index, patch in enumerate([patch for patch in patches_eval_patches]) if index % 2 != 0]
+    # extract the training patches
+    patch_subsets["train"] = list(set(all_patches)-set(eval_patches))
 
-    # determine the patches that will form the training set
-    eval_patches = subevent_test_patches + subevent_val_patches + timing_test_patches + other_test_patches + other_val_patches + patches_val_patches + patches_test_patches
-    training_patches = list(set(all_patches)-set(eval_patches))
+    # create the subset dataframe
+    subset_df = pd.concat([pd.DataFrame({"patch":patches, "subset":[f"{patches_name}"]*len(patches)}) for patches_name, patches in patch_subsets.items()])
+    subset_df["event"] = subset_df["patch"].str.split("_").str[0]
+    subset_df["subevent"] = subset_df["patch"].str.split("_").str[0] + "_" + subset_df["patch"].str.split("_").str[1]
+    subset_df = subset_df.to_csv(f"{data_folder}/subsets/europe_data_subset.csv", index=False)
 
-    # create_empty_patch_csv(data_folder)
-
-    # save the assignment of the patches to the data subsets in a csv file
-    subset = pd.read_csv(f"{data_folder}/metadata/empty_data_subset.csv")
-    subset.loc[subset["patch"].isin(training_patches), "subset"] = "train"
-    subset.loc[subset["patch"].isin(other_test_patches), "subset"] = "test_other"
-    subset.loc[subset["patch"].isin(subevent_test_patches), "subset"] = "test_subevent"
-    subset.loc[subset["patch"].isin(patches_test_patches), "subset"] = "test_patches"
-    subset.loc[subset["patch"].isin(timing_test_patches), "subset"] = "test_timing"
-    subset.loc[subset["patch"].isin(other_val_patches), "subset"] = "val_other"
-    subset.loc[subset["patch"].isin(subevent_val_patches), "subset"] = "val_subevent"
-    subset.loc[subset["patch"].isin(patches_val_patches), "subset"] = "val_patches"
-    subset.to_csv(f"{data_folder}/metadata/data_subset.csv", index=False)
+    # create an alternate data subset for a single event only
+    all_patches = os.listdir(f"{data_folder}/local/label")
+    val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR788_2025-02-04"])]
+    train_patches = [patch for patch in all_patches if any(event in patch for event in ["EMSR788"])]
+    train_patches = list(set(train_patches)-set(val_patches))
+    subset_df = pd.concat([pd.DataFrame({"patch":val_patches, "subset":["val"]*len(val_patches)}),
+                           pd.DataFrame({"patch":train_patches, "subset":["train"]*len(train_patches)})])
+    subset_df["event"] = subset_df["patch"].str.split("_").str[0]
+    subset_df["subevent"] = subset_df["patch"].str.split("_").str[0] + "_" + subset_df["patch"].str.split("_").str[1]
+    subset_df.to_csv(f"{data_folder}/subsets/del_event_val_data_subset.csv", index=False)
 
 def find_wider_scale_bounds(data_folder, global_folder):
     """
@@ -169,6 +169,7 @@ def find_wider_scale_bounds(data_folder, global_folder):
     The "context" scale corresponds to the level 12 basin, and the "basin" scale corresponds to the level 6 basin.
     """
     # import in the polygons for the basins at level 6 and 12
+    print("Importing global river basin polygon reference data...")
     lvl6_basin = gpd.read_file(f"{global_folder}/global_basins/lev06_basin.geojson")
     lvl12_basin = gpd.read_file(f"{global_folder}/global_basins/lev12_basin.geojson")
 
@@ -177,7 +178,7 @@ def find_wider_scale_bounds(data_folder, global_folder):
     all_patches.sort()
     scales = {"patch":[], "basin_geometry":[], "context_geometry":[], "patch_geometry":[]}
 
-    for patch in tqdm(all_patches):
+    for patch in tqdm(all_patches, desc="Find context and basin scale boundaries"):
 
         # find the boundaries and the centre of each local 256x256 patch
         with rasterio.open(f"{data_folder}/local/label/" + patch) as file:
@@ -215,7 +216,8 @@ def find_wider_scale_bounds(data_folder, global_folder):
         aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson").drop_duplicates(["event", "subevent", "event_date"]).reset_index(drop=True)[["subevent", "event_date"]]
         scales_gdf = scales_gdf.merge(aois, how="left", on="subevent").reset_index(drop=True)
         aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-        for index in tqdm(range(len(scales_gdf))):
+        scales_gdf = gpd.GeoDataFrame(scales_gdf)
+        for index in range(len(scales_gdf)):
             subevent_aois = aois[aois["subevent"]==scales_gdf.loc[index, "subevent"]]
             intersecting = subevent_aois[subevent_aois.geometry.intersects(scales_gdf.loc[index, "patch_geometry"])]
             if len(intersecting) == 0:
@@ -243,7 +245,7 @@ def find_wider_scale_bounds(data_folder, global_folder):
     for geometry in ["context_geometry", "basin_geometry"]:
         multi = id_gdf[geometry].astype(str).str.contains("MULTI")
         id_gdf.loc[multi, geometry] = id_gdf.loc[multi, geometry].apply(lambda row : unary_union(row).convex_hull)
-    id_gdf = id_gdf.merge(scales_gdf[["geometry_event_date_id", "date"]].drop_duplicates(), on="geometry_event_date_id", how="left")
+    id_gdf = id_gdf.merge(scales_gdf[["geometry_event_date_id", "date", "event_date", "subevent"]].drop_duplicates(), on="geometry_event_date_id", how="left")
 
     # save the aoi boundaries as a geojson file
     gpd.GeoDataFrame(id_gdf).to_file(f"{data_folder}/metadata/scales_aois.geojson")

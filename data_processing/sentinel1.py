@@ -48,7 +48,7 @@ def find_sentinel1_availability(data_folder, scale):
     if not os.path.isdir(sentinel1_geojson_folder):
         os.mkdir(sentinel1_geojson_folder)
 
-    for index in tqdm(range(len(extents))):
+    for index in tqdm(range(len(extents)), desc=f"Find Sentinel 1 availability at {scale} scale"):
 
         subevent = extents.loc[index, "subevent"]
         save_path = f"{sentinel1_geojson_folder}/{subevent}_aoi_{index}"
@@ -115,13 +115,12 @@ def download_sentinel1(data_folder, scale):
         os.mkdir(sentinel1_folder)
 
     # download data for each aoi individually
-    for index in tqdm(list(aois.index), desc="aoi"):
+    for index in tqdm(list(aois.index), desc=f"Download Sentinel 1 data for scale {scale}"):
 
         subevent = aois.loc[index, "subevent"]
         save_data_folder = f"{sentinel1_folder}/aoi_{aois.loc[index, "geometry_event_date_id"]}"
 
         if not os.path.isdir(save_data_folder):
-            print("\n", "\n", "Index:", index, "Folder:", save_data_folder)
 
             # split the aoi into boxes of a maximum 2500x2500 pixels each
             geometry = Geometry(aois.loc[index, "geometry"], CRS.WGS84)
@@ -151,7 +150,7 @@ def download_sentinel1(data_folder, scale):
                 else:
                     geometry_correctly_sized = True
 
-            for bbox in tqdm(split_aois, desc="split", leave=False):
+            for bbox in split_aois:
                 bbox_size = bbox_to_dimensions(bbox, resolution=resolution)
 
                 # restrict the start of the data retrieval date interval to known Sentinel 1 data availability
@@ -239,7 +238,7 @@ def create_sentinel1_aoi_date_difference(data_folder, scale):
     if not os.path.isdir(sentinel1_raster_folder):
         os.mkdir(sentinel1_raster_folder)
 
-    for index in tqdm(range(len(aois))):
+    for index in tqdm(range(len(aois)), desc=f"Create Sentinel 1 AOI rasters for {scale} scale"):
 
         aoi_id = aois.loc[index, 'geometry_event_date_id']
         subevent = aois.loc[index, "subevent"]
@@ -289,7 +288,7 @@ def create_sentinel1_rasters(data_folder):
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc="Create Sentinel 1 rasters"):
 
         # extract the metadata corresponding to each subevent raster
         subevent = raster_extents["subevent"][index]
@@ -339,7 +338,7 @@ def create_sentinel1_scale_rasters(data_folder, scale):
     if not os.path.isdir(save_folder):
         os.mkdir(save_folder)
 
-    for index in tqdm(range(len(patch_extents))):
+    for index in tqdm(range(len(patch_extents)), desc=f"Create Sentinel 1 rasters for {scale} scale"):
 
         bounds = patch_extents.loc[index, "geometry"].bounds
         subevent = patch_extents["subevent"][index]

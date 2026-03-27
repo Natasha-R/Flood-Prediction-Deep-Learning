@@ -32,7 +32,7 @@ def download_precipitation(data_folder, global_folder):
     all_dates.sort()
 
     # download the precipitation data for each date
-    for date in tqdm(all_dates):
+    for date in tqdm(all_dates, "Download precipitation data"):
 
         geotiff_path = f"{global_precipitation_folder}/{date}_global.tif"
         if os.path.isfile(geotiff_path):
@@ -98,7 +98,7 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
     if not os.path.isdir(precipitation_folder):
         os.mkdir(precipitation_folder)
     
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), f"Create precipitation rasters for {scale} scale"):
 
         # extract metadata on the subevent
         date = raster_extents["date"].dt.date[index]

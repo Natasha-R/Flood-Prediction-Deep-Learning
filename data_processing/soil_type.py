@@ -30,7 +30,7 @@ def create_soil_type(data_folder, global_folder, scale):
     if not os.path.isdir(soil_bulk_density_folder):
         os.mkdir(soil_bulk_density_folder)
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), f"Create soil type rasters for {scale} scale"):
 
         # import the metadata for the current raster
         bounds = raster_extents["geometry"][index].bounds

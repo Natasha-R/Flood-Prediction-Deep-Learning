@@ -55,9 +55,8 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
     """
 
     # import the seas and oceans polygons
-    print("Importing in all seas and oceans polygons...")
+    print("Importing global seas and oceans polygon reference data...")
     seas = gpd.read_file(f"{global_folder}/global_seas_polygons/water_polygons.shp")
-    print("Import complete")
 
     if type(scale) is not list:
         scale = [scale]
@@ -73,15 +72,14 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             raster_extents["geometry"] = raster_extents[f"{scale_name}_geometry"].apply(shapely.wkt.loads)
             permanent_water_raster_folder = f"{data_folder}/{scale_name}/permanent_water"
             if scale_name == "basin":
-                print("Importing in all global rivers polygons...")
+                print("Importing global river reference data...")
                 global_rivers = gpd.read_file(f"{global_folder}/global_rivers/HydroRIVERS_v10.shp")
                 global_rivers = global_rivers[global_rivers["ORD_CLAS"] == 1]
-                print("Import complete")
         global_grid = gpd.read_file(f"{global_folder}/global_permanent_water/global_grid_1x1_reduced.geojson")
         if not os.path.isdir(permanent_water_raster_folder):
             os.mkdir(permanent_water_raster_folder)
 
-        for index in tqdm(range(len(raster_extents))):
+        for index in tqdm(range(len(raster_extents)), desc=f"Create permanent water rasters for {scale_name}"):
 
             subevent = raster_extents["subevent"][index]
             if scale_name == "local":

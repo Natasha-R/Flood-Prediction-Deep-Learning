@@ -24,7 +24,7 @@ def create_label_local_patches(data_folder):
     if not os.path.isdir(f"{data_folder}/local/label/"):
         os.mkdir(f"{data_folder}/local/label/")
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(len(raster_extents)), desc="Create label patches"):
 
         selected_patches = []
         subevent = raster_extents["subevent"][index]
@@ -94,9 +94,9 @@ def create_features_local_patches(data_folder):
         if not os.path.isdir(f"{data_folder}/local/{feature}/"):
             os.mkdir(f"{data_folder}/local/{feature}/")
             
-    for feature in tqdm(features, desc="feature"):
+    for feature in tqdm(features, desc=f"Create local patches for features"):
 
-        for index in tqdm(range(len(raster_extents)), desc="raster", leave=False):
+        for index in range(len(raster_extents)):
 
             # import metadata on the indices to extract from this raster, calculated from the label data
             subevent = raster_extents["subevent"][index]

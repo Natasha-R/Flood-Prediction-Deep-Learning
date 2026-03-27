@@ -13,6 +13,7 @@ from data_processing.flow_accumulation import create_flow_accumulation
 from data_processing.flow_direction import create_flow_direction
 import os
 import argparse
+from datetime import datetime
 
 ##### PRELIMINARY SET-UP
 
@@ -27,73 +28,98 @@ import argparse
 
 def main(data_folder, global_folder):
 
+    print(str(datetime.now()), "Beginning data creation and processing!", flush=True)
+
+    ######################## LABELS
+
     # Process the CEMS data
-    print("Processing the labels...")
+    print(str(datetime.now()), "Processing the flood event labels...", flush=True)
     create_cems_geojson(data_folder)
     create_cems_raster(data_folder)
+    print(str(datetime.now()), "Label processing complete!", flush=True)
 
     # Create metadata describing the AOIs and rasters of the CEMS data
+    print(str(datetime.now()), "Creating metadata describing the flood events...", flush=True)
     create_aoi_metadata(data_folder)
     create_raster_metadata(data_folder)
-
-    # Create local 256x256 patches of the labels
-    print("Creating local patches from the labels...")
-    create_label_local_patches(data_folder)
-
-    # Find the bounds of the wider context and basin scales
-    print("Finding the bounds for the context and basin scales...")
-    find_wider_scale_bounds(data_folder, global_folder)
-    for scale in ["context", "basin"]:
-        create_label_scales(data_folder, scale)
+    print(str(datetime.now()), "Metadata creation complete!", flush=True)
 
     # Create the permanent water rasters and modify the CEMS rasters to create the final labels
     # download_global_permanent_water(data_folder, global_folder)
-    create_permanent_water_rasters(data_folder, global_folder, ["local", "context", "basin"])
+    print(str(datetime.now()), "Creating local permanent water rasters...", flush=True)
+    create_permanent_water_rasters(data_folder, global_folder, "local")
+    print(str(datetime.now()), "Local permanent water rasters created!", flush=True)
+    print(str(datetime.now()), "Combining the CEMS labels and permanent water rasters...", flush=True)
     combine_cems_and_permanent_water(data_folder)
+    print(str(datetime.now()), "Combinations of CEMS labels and permanent water rasters complete!", flush=True)
+
+    # Create local 256x256 patches of the labels
+    print(str(datetime.now()), "Creating local patches of the labels...", flush=True)
+    create_label_local_patches(data_folder)
+    print(str(datetime.now()), "All local label patches created!", flush=True)
+
+    # Create label patches for the context and basin scales
+    print(str(datetime.now()), "Creating 'basin' and 'context' scale patches of the labels...", flush=True)
+    find_wider_scale_bounds(data_folder, global_folder)
+    for scale in ["context", "basin"]:
+        create_label_scales(data_folder, scale)
+    print(str(datetime.now()), "Basin and context scale label patches created!", flush=True)
+
+    print(str(datetime.now()), "Creating context and basin permanent water rasters...", flush=True)
+    create_permanent_water_rasters(data_folder, global_folder, ["context", "basin"])
+    print(str(datetime.now()), "Context and basin permanent water rasters created!", flush=True)
     
+    ######################## FEATURES
+
     # Create the DEM rasters
-    print("Creating DEM rasters...")
+    print(str(datetime.now()), "Creating DEM rasters...", flush=True)
     extract_dem_aoi(data_folder, global_folder)
     create_dem_rasters(data_folder)
     for scale in ["context", "basin"]:
         create_dem_scales(data_folder, global_folder, scale)
+    print(str(datetime.now()), "DEM rasters created!", flush=True)
 
     # Create the soil moisture and soil type rasters
-    print("Creating soil moisture and soil type rasters...")
+    print(str(datetime.now()), "Creating soil moisture and soil type rasters...", flush=True)
     download_soil_moisture_data(data_folder, global_folder)
     for scale in ["local", "context", "basin"]:
         create_soil_moisture_rasters(data_folder, global_folder, scale=scale)
         create_soil_type(data_folder, global_folder, scale=scale)
+    print(str(datetime.now()), "Soil moisture and soil type rasters created!", flush=True)
 
     # Create the precipitation rasters
-    print("Creating precipitation rasters...")
+    print(str(datetime.now()), "Creating precipitation rasters...", flush=True)
     download_precipitation(data_folder, global_folder)
     for scale in ["local", "context", "basin"]:
         create_precipitation_rasters(data_folder, global_folder, scale)
+    print(str(datetime.now()), "Precipitation rasters created!", flush=True)
 
     # Create the land cover rasters
-    print("Creating land cover rasters...")
+    print(str(datetime.now()), "Creating land cover rasters...", flush=True)
     for scale in ["local", "context", "basin"]:
         create_land_cover_rasters(data_folder, global_folder, scale)
+    print(str(datetime.now()), "Land cover rasters created!", flush=True)
 
     # Create the flow accumulation and flow direction rasters
-    print("Creating flow accumulation and direction rasters...")
+    print(str(datetime.now()), "Creating flow accumulation and direction rasters...", flush=True)
     for scale in ["local", "context", "basin"]:
        create_flow_accumulation(data_folder, global_folder, scale)
        create_flow_direction(data_folder, global_folder, scale)
+    print(str(datetime.now()), "Flow accumulation and direction rasters created!", flush=True)
 
     # Create the Sentinel 2 rasters
-    print("Downloading and processing Sentinel 2 data...")
-    find_sentinel2_availability(data_folder)
-    find_minimal_cloud_cover(data_folder)
-    download_sentinel2(data_folder)
+    print(str(datetime.now()), "Creating Sentinel 2 rasters...", flush=True)
+    #for scale in ["local", "context", "basin"]:
     for scale in ["context", "basin"]:
+        find_sentinel2_availability(data_folder, scale)
+        find_minimal_cloud_cover(data_folder, scale)
+        download_sentinel2(data_folder, scale)
         set_sentinel2_nodata(data_folder, scale)
-    for scale in ["local", "context", "basin"]:
         create_sentinel2_rasters(data_folder, scale)
+    print(str(datetime.now()), "Sentinel 2 rasters created!", flush=True)
 
     # Create the Sentinel 1 rasters
-    print("Downloading and processing Sentinel 1 data...")
+    print(str(datetime.now()), "Creating Sentinel 1 rasters...", flush=True)
     for scale in ["local", "context", "basin"]:
         find_sentinel1_availability(data_folder, scale)
         download_sentinel1(data_folder, scale) 
@@ -101,10 +127,14 @@ def main(data_folder, global_folder):
     create_sentinel1_rasters(data_folder)
     for scale in ["context", "basin"]:
         create_sentinel1_scale_rasters(data_folder, scale)
+    print(str(datetime.now()), "Sentinel 1 rasters created!", flush=True)
 
     # Create local 256x256 patches of the features
-    print("Creating local patches of the features...")
+    print(str(datetime.now()), "Creating local patches of the features...", flush=True)
     create_features_local_patches(data_folder)
+    print(str(datetime.now()), "Local patches for features created!", flush=True)
+
+    print(str(datetime.now()), "All data creation and processing complete!", flush=True)
 
 if __name__ == "__main__":
 
