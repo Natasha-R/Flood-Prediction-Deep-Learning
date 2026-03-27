@@ -109,11 +109,21 @@ class ToTensor(object):
      def __call__(self, data):
 
           for scale in self.scales:
+               
                data[f"{scale}_features"] = self.concat_data(data[f"{scale}_features"]) # CxHxW
 
                data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
-               if not self.config["separate_flood_trace_label"]:
-                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # 0: no data, 1: aoi, 2: flood trace, 3: flooded area
+               # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area
+               # after: 0: no data, 1: aoi, 2: flood
+               if self.config.get("flood_trace_label", "flood"):
+                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # combine flood trace and flooded
+               else:
+                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to other
+                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2
+               
+               if self.config.get("loss_function", "cross entropy").lower()=="dice":
+                    data[f"{scale}_label"][data[f"{scale}_label"]==1] = 0
+                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1
 
                if self.class_features_exist:
                     data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])

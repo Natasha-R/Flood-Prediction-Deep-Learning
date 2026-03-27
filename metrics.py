@@ -2,62 +2,87 @@ import modelling.utils as utils
 import modelling.data_pipeline as data_pipeline
 import argparse
 from torchmetrics.classification import MulticlassAccuracy, MulticlassF1Score, MulticlassPrecision, MulticlassRecall
+from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision, BinaryRecall
 from torchmetrics.segmentation import MeanIoU
 import torch
 import pandas as pd
 import os
 from collections import defaultdict
+from modelling.utils import convert_to_classification
 
-def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, logger, device, subset=None, subevent=None, event=None, patch=None):
+def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, device, subset=None, subevent=None, event=None, patch=None,
+                      classification=False, threshold=None, c_precision=None):
 
-    # define the metrics functions
-    class_f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
-    class_precision = MulticlassPrecision(num_classes=config["num_classes"], average=None).to(device)
-    class_recall = MulticlassRecall(num_classes=config["num_classes"], average=None).to(device)
-    class_accuracy = MulticlassAccuracy(num_classes=config["num_classes"], average=None).to(device)
-    class_iou = MeanIoU(num_classes=config["num_classes"], per_class=True, input_format="index").to(device)
-    metrics_functions = [class_f1, class_precision, class_recall, class_accuracy]
-    metrics_names = ["f1", "precision", "recall", "accuracy"]
+    model.eval()
+    with torch.no_grad():
 
-    # make model predictions on the dataset
-    predictions, labels = defaultdict(list), defaultdict(list)
-    for data in loader:
-        for item in data.keys():
-            data[item] = data[item].to(device)
-        model_output = model(data)
-        for scale in config["scales"]:
-            predictions[scale].append(torch.argmax(model_output[f"{scale}_pred"], dim=1))
-            labels[scale].append(data[f"{scale}_label"])
+        binary_prediction = False
+        loss_function = "cross entropy"
+        if config.get("loss_function", "cross entropy").lower()=="dice":
+            binary_prediction = True
+            loss_function = "dice"
+        if classification:
+            binary_prediction = True
+        config["threshold"] = threshold
+        config["precision"] = c_precision
+        config["classification_evaluation"] = classification
 
-    for scale in config["scales"]:
-        predictions[scale] = torch.concat(predictions[scale], dim=0)
-        labels[scale] = torch.concat(labels[scale], dim=0)
+        # define the metrics functions for both the binary and multi-class cases
+        if binary_prediction:
+            f1 = BinaryF1Score().to(device)
+            precision = BinaryPrecision().to(device)
+            recall = BinaryRecall().to(device)
+            accuracy = BinaryAccuracy().to(device)
+            #iou = MeanIoU(num_classes=1, input_format="index").to(device)
+        else:
+            f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
+            precision = MulticlassPrecision(num_classes=config["num_classes"], average=None).to(device)
+            recall = MulticlassRecall(num_classes=config["num_classes"], average=None).to(device)
+            accuracy = MulticlassAccuracy(num_classes=config["num_classes"], average=None).to(device)
+            #iou = MeanIoU(num_classes=config["num_classes"], per_class=True, input_format="index").to(device)
+        metrics_functions = [f1, precision, recall, accuracy]
+        metrics_names = ["f1", "precision", "recall", "accuracy"]
 
-    if config["separate_flood_trace_label"]:
-       class_names = ["flooded_area",  "flood_trace", "no_flood"] 
-       class_indices = [3, 2, 1]
-    else: 
-        class_names = ["flood", "no_flood"]
-        class_indices = [2, 1]
+        # make model predictions on the dataset
+        predictions, labels = defaultdict(list), defaultdict(list)
+        for data in loader:
+            for item in data.keys():
+                data[item] = data[item].to(device)
+            model_output = model(data)
+            for scale in config["output_scales"]:
+                if loss_function == "dice":
+                    model_output[f"{scale}_pred"] = (torch.sigmoid(model_output[f"{scale}_pred"].squeeze()) > 0.5)*1
+                else:
+                    model_output[f"{scale}_pred"] = torch.argmax(model_output[f"{scale}_pred"], dim=1)
+                if classification:
+                    model_output[f"{scale}_pred"], data[f"{scale}_label"] = convert_to_classification(config=config, pred=model_output[f"{scale}_pred"], label=data[f"{scale}_label"])
+                
+                predictions[scale].append(model_output[f"{scale}_pred"])
+                labels[scale].append(data[f"{scale}_label"])
 
-    dataset_subset = "_".join([filter_type for filter_type in [subset, subevent, event, patch] if filter_type])
-    metrics = {"config_name": [config_name], "epoch": [epoch], "dataset_subset": [dataset_subset]}
-    metrics.update({key: [str(value)] for key, value in config.items()})
+        for scale in config["output_scales"]:
+            predictions[scale] = torch.concat(predictions[scale], dim=0)
+            labels[scale] = torch.concat(labels[scale], dim=0)
 
-    # calculate metrics from the model predictions
-    for scale in config["scales"]:
-        for class_index, class_name in zip(class_indices, class_names):
+        dataset_subset = "_".join([filter_type for filter_type in [subset, subevent, event, patch] if filter_type])
+        metrics = {"config_name": [config_name], "epoch": [epoch], "dataset_subset": [dataset_subset]}
+        metrics.update({key: [str(value)] for key, value in config.items()})
+
+        # calculate metrics from the model predictions
+        for scale in config["output_scales"]:
             for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
-                metric = metrics_function(predictions[scale], labels[scale])[class_index]
-                metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
-            metric = class_iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[class_index]
-            metrics[f"iou_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
+                metric = metrics_function(predictions[scale], labels[scale])
+                metric = metric[2] if not binary_prediction else metric
+                metrics[f"{metrics_name}_{scale}"] = [f"{metric.item():.3f}"]
+                # if not binary_prediction:
+                 #metric = iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[2]
+                 #metrics[f"iou_{scale}"] = [f"{metric.item():.3f}"]
 
-    # save the metrics results
-    metrics = pd.DataFrame(metrics)
-    metrics_path = f"{modelling_folder}/metrics/{config_name}.csv"
-    logger.info(f"Saving {subset} evaluation metrics to {metrics_path}")
-    metrics.to_csv(metrics_path, mode="a", header=not os.path.exists(metrics_path), index=False)
+        # save the metrics results
+        metrics = pd.DataFrame(metrics)
+        metrics_path = f"{modelling_folder}/metrics/{config_name}.csv"
+        print(f"Saving {subset} evaluation metrics to {metrics_path}")
+        metrics.to_csv(metrics_path, mode="a", header=not os.path.exists(metrics_path), index=False)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise the model's predictions.")
@@ -66,6 +91,10 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--data_folder', default=os.environ["DATA_FOLDER"], help="The path to the dataset folder.")
     parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
+
+    parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
+    parser.add_argument('--threshold', type=str, default="0.05", help="Specify a threshold for the flood proportion.")
+    parser.add_argument('--precision', type=str, default="1", help="Specify the precision for the classification evaluation.")
 
     parser.add_argument('-s', '--subset', default=None, help="Specify a data subset to calculate metrics on.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
@@ -76,14 +105,19 @@ if __name__ == "__main__":
 
     utils.check_paths(args)
     utils.check_cuda()
-    logger = utils.get_logger()
 
-    config, config_name = utils.load_config(args.config_path, logger)
+    config, config_name = utils.load_config(args.config_path)
     config["batch_size"] = 4
     num_epochs = args.epochs if args.epochs else config['number_epochs']
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
-    model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
+    model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
     loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)
+    
+    args.threshold = [float(value) for value in args.threshold.replace(" ", "").split(",")]
+    args.precision = [int(value) for value in args.precision.replace(" ", "").split(",")]
 
-    calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
-                      logger=logger, device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)
+    for threshold in args.threshold:
+        for c_precision in args.precision:
+            calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
+                            device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch,
+                            classification=args.classification, threshold=threshold, c_precision=c_precision)

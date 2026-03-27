@@ -7,8 +7,11 @@ import modelling.utils as utils
 import argparse
 import pandas as pd
 from visualise import plot_losses
+from metrics import calculate_metrics
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from segmentation_models_pytorch.losses import DiceLoss
+from modelling.focal_loss import FocalLoss
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -29,83 +32,90 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
     else:
         torch.manual_seed(47)
 
-    logger = utils.get_logger()
-    config, config_name = utils.load_config(config_path, logger)
-    model = utils.load_model(config, rank, logger, ddp)
-    subsets = list(pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")["subset"].unique())
-    subsets = [subset for subset in subsets if "test" not in subset]
-    data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
-    loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
+    try:
+        logger = utils.get_logger()
+        config, config_name = utils.load_config(config_path, logger)
+        model = utils.load_model(config, rank, ddp, logger)
+        subsets = list(pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")["subset"].unique())
+        subsets = [subset for subset in subsets if "test" not in subset]
+        data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset) for subset in subsets}
+        if config.get("loss_function", "cross entropy").lower()=="dice":
+            loss_function = DiceLoss(mode="binary", from_logits=True, ignore_index=0)
+        else:
+            loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
+        optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
 
-    optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
-
-    losses = {f"total_{subset}_losses": [] for subset in subsets}
-    losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
-    losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
-    losses.update({f"total_{subset}_local_losses": [] for subset in subsets})
-
-    for epoch in range(1, config["number_epochs"]+1):
-
-        epoch_start_time = time.time()
+        losses = {f"total_{subset}_losses": [] for subset in subsets}
         losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
         losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
+        losses.update({f"total_{subset}_local_losses": [] for subset in subsets})
+
+        for epoch in range(1, config["number_epochs"]+1):
+
+            epoch_start_time = time.time()
+            losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
+            losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
+            if ddp:
+                data_loaders["train"].sampler.set_epoch(epoch)
+
+            model.train()
+            for data in tqdm(data_loaders["train"], desc="Training", leave=False):
+                optimizer.zero_grad()
+                for item in data.keys():
+                    data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
+                model_output = model(data)#BclassesHW
+
+                loss = 0.0
+                local_losses = 0.0
+                for scale in config["output_scales"]:
+                    indiv_loss = loss_function(model_output[f"{scale}_pred"].squeeze(), data[f"{scale}_label"])
+                    loss = loss + config[f"{scale}_weight"] * indiv_loss
+                    if scale == "local":
+                        local_losses += indiv_loss.item()
+                loss.backward()
+                optimizer.step()
+                losses["epoch_train_losses"].append(loss.item())
+                losses["epoch_train_local_losses"].append(local_losses)
+                scheduler.step()
+                
+            model.eval()
+            with torch.no_grad():
+                for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
+                    for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
+                        for item in data.keys():
+                            data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
+                        model_output = model(data)
+                        loss = 0.0
+                        local_losses = 0.0
+                        for scale in config["output_scales"]:
+                            indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                            loss = loss + config[f"{scale}_weight"] * indiv_loss
+                            if scale == "local":
+                                local_losses += indiv_loss.item()
+                        losses[f"epoch_{validation_loader}_losses"].append(loss.item())
+                        losses[f"epoch_{validation_loader}_local_losses"].append(local_losses)
+
+            loss_string = f"GPU: {rank} | Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
+            for loss_type in subsets:
+                losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
+                loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
+                losses[f"total_{loss_type}_local_losses"].append(sum(losses[f"epoch_{loss_type}_local_losses"]) / len(losses[f"epoch_{loss_type}_local_losses"]))
+                loss_string += f" | {loss_type} local loss: {losses[f'total_{loss_type}_local_losses'][-1]:.3f}"
+            logger.info(loss_string)
+
+            if config["save_model_on_epoch"] != 0 and ((epoch % config["save_model_on_epoch"]) == 0):
+                if rank==0 or ddp==False:
+                    model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
+                    torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
+                    logger.info(f"Saved the model to: {model_save_path}")
+                    plot_losses(losses, config, config_name, modelling_folder, rank, logger)
+                    for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
+                        calculate_metrics(config, config_name, model, data_loaders[validation_loader], modelling_folder, epoch=epoch, device=rank, subset=validation_loader)
+                        logger.info(f"Saved {validation_loader} evaluation metrics to: {modelling_folder}/metrics/{config_name}.csv")
+    finally:
         if ddp:
-            data_loaders["train"].sampler.set_epoch(epoch)
-
-        model.train()
-        for data in tqdm(data_loaders["train"], desc="Training", leave=False):
-            optimizer.zero_grad()
-            for item in data.keys():
-                data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
-            model_output = model(data) #BclassesHW
-            loss = 0.0
-            local_losses = 0.0
-            for scale in config["scales"]:
-                indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
-                loss = loss + config[f"{scale}_weight"] * indiv_loss
-                if scale == "local":
-                    local_losses += indiv_loss.item()
-            loss.backward()
-            optimizer.step()
-            losses["epoch_train_losses"].append(loss.item())
-            losses["epoch_train_local_losses"].append(local_losses)
-            scheduler.step()
-            
-        model.eval()
-        with torch.no_grad():
-            for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
-                for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
-                    for item in data.keys():
-                        data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
-                    model_output = model(data)
-                    loss = 0.0
-                    local_losses = 0.0
-                    for scale in config["scales"]:
-                        indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
-                        loss = loss + config[f"{scale}_weight"] * indiv_loss
-                        if scale == "local":
-                            local_losses += indiv_loss.item()
-                    losses[f"epoch_{validation_loader}_losses"].append(loss.item())
-                    losses[f"epoch_{validation_loader}_local_losses"].append(local_losses)
-
-        loss_string = f"GPU: {rank} | Epoch {epoch} ({time.time() - epoch_start_time:.0f} seconds)"
-        for loss_type in subsets:
-            losses[f"total_{loss_type}_losses"].append(sum(losses[f"epoch_{loss_type}_losses"]) / len(losses[f"epoch_{loss_type}_losses"]))
-            loss_string += f" | {loss_type} loss: {losses[f'total_{loss_type}_losses'][-1]:.3f}"
-            losses[f"total_{loss_type}_local_losses"].append(sum(losses[f"epoch_{loss_type}_local_losses"]) / len(losses[f"epoch_{loss_type}_local_losses"]))
-            loss_string += f" | {loss_type} local loss: {losses[f'total_{loss_type}_local_losses'][-1]:.3f}"
-        logger.info(loss_string)
-
-        if config["save_model_on_epoch"] != 0 and ((epoch % config["save_model_on_epoch"]) == 0):
-            if rank == 0:
-                model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
-                torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
-                logger.info(f"Saved the model to: {model_save_path}")
-                plot_losses(losses, config, config_name, modelling_folder, rank, logger)
-
-    if ddp:
-        cleanup()
+            cleanup()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the model.")
