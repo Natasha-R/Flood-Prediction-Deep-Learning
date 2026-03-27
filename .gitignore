@@ -2,6 +2,7 @@
 temp_code/
 *.out
 modelling.sh
+evaluating.sh
 .vscode/
 
 # Byte-compiled / optimized / DLL files
