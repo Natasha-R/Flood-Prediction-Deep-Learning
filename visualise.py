@@ -12,17 +12,32 @@ from rasterio.features import rasterize
 from scipy.ndimage import binary_erosion
 from shapely.geometry import box
 import geopandas as gpd
+from metrics import convert_to_classification
 
-def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, logger, subevent, file_type, 
-                          scale, patch, pred_only, test_border, mask_features=None, mask_patch=None):
+def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
+                          scale, patch, pred_only, test_border, classification, threshold, precision, mask_features=None, mask_patch=None):
+
+    loss_function = "cross entropy"
+    if config.get("loss_function", "cross entropy").lower()=="dice":
+        loss_function = "dice"
+    if classification:
+        config["classification_evaluation"] = classification
+        config["threshold"] = threshold
+        config["precision"] = precision
 
     # load the dataset
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_patch=mask_patch)
     if patch: subevent=patch
 
+    path_folder = f"{modelling_folder}/visualise/{config_name}/"
+    if not os.path.exists(path_folder):
+        os.mkdir(path_folder)
+
     # define the colours for the visualisation
-    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 3: (22, 130, 184), 4:(255, 251, 0), 5:(124, 252, 0)}
-    matching_colours = {0: (0, 0, 0), 1: (202, 61, 23), 2: (35, 220, 71), 4:(255, 251, 0), 5:(124, 252, 0)}
+    # 0: no data, 1: aoi, 2: flood, 4: val border, 5: test border
+    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 4:(255, 255, 255), 5:(152, 97, 255)} 
+    # 0 no data, 1: underpredict, 2: overpredict, 3: correct, 4: val border, 5: test border
+    matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(152, 97, 255)} 
     all_patch_paths = []
 
     for patch_index in range(len(dataset)):
@@ -32,10 +47,29 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
         sample = dataset[patch_index]
         for item in sample.keys():
             sample[item] = sample[item].unsqueeze(0).to(device)
+
         # make a model prediction from the patch
         model_output = model(sample)
-        predicted_class = torch.argmax(model_output[f"{scale}_pred"], dim=1)
-        correctly_matching = ((sample[f"{scale}_label"].squeeze()==predicted_class.squeeze())*1) + 1 # 0 is no data, 1 is incorrect, 2 is correct
+        if loss_function=="dice":
+            predicted_class = model_output[f"{scale}_pred"]
+            predicted_class = (torch.sigmoid(predicted_class.squeeze()) > 0.5) * 1
+        else:
+            predicted_class = torch.argmax(model_output[f"{scale}_pred"], dim=1).squeeze()
+        label = sample[f"{scale}_label"].squeeze()
+        if classification:
+            predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
+            predicted_class, label = predicted_class.squeeze(), label.squeeze()
+            label[label == 1] = 2
+            label[label == 0] = 1
+        if loss_function=="dice" or classification:
+            predicted_class[predicted_class == 1] = 2
+            predicted_class[predicted_class == 0] = 1
+
+        # evaluate the matching of prediction to label
+        correctly_matching = torch.zeros_like(label)
+        correctly_matching[(label == 2) & (predicted_class == 2)] = 3 # flood predict correct
+        correctly_matching[(label != 2) & (predicted_class == 2)] = 2 # overpredict flood
+        correctly_matching[(label == 2) & (predicted_class != 2)] = 1 # underpredict flood
         
         # use the corresponding label file as a reference for the size and geographical bounds of the data patch
         with rasterio.open(f"{data_folder}/{scale}/label/{patch_file}") as reference_file:
@@ -43,7 +77,7 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             meta.update({"count": 3, "dtype": "int8", "nodata":0})
 
         # save the predictions for the data patch
-        patch_path = f"{modelling_folder}/visualise/{config_name}_{patch_file}"
+        patch_path = f"{path_folder}/{config_name}_{patch_file}"
         with rasterio.open(patch_path, "w", **meta, compress="LZW") as file:
             file.write(predicted_class.squeeze().to(torch.int8).cpu().numpy(), 1)
             file.write(sample[f"{scale}_label"].squeeze().to(torch.int8).cpu().numpy(), 2)
@@ -75,8 +109,12 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                         full_subevent[band][border_mask] = value
 
     # save the visualisation as geotiff, with predicted, ground truth label, and matching bands
+    save_path = f"{path_folder}/{config_name}_{num_epochs}epochs_{scale}_{subevent}"
+    if classification:
+        save_path = f"{save_path}_thresh{str(threshold).replace(".","-")}_prec{precision}"
+
     if file_type == "geotiff":
-        with rasterio.open(f"{modelling_folder}/visualise/{config_name}_{num_epochs}epochs_{scale}_{subevent}.tif", "w", **full_subevent_meta, compress="LZW") as file:
+        with rasterio.open(f"{save_path}.tif", "w", **full_subevent_meta, compress="LZW") as file:
             file.write(full_subevent)
             for band_name, band_num, colour_map in zip(["Model Predicted Class", "Label Class", "Correctly Matching"], [1, 2, 3], 
                                                        [label_colours, label_colours, matching_colours]):
@@ -94,7 +132,7 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             for value, colour in colour_map.items():
                 for channel in range(3):
                     rgb_image[..., channel][full_subevent[index] == value] = colour[channel]
-            Image.fromarray(rgb_image).save(f"{modelling_folder}/visualise/{config_name}_{num_epochs}epochs_{scale}_{subevent}_{image_name}.png", 'PNG')
+            Image.fromarray(rgb_image).save(f"{save_path}_{image_name}.png", 'PNG')
 
     # close all open files and delete all temporary files
     for file in all_patches:
@@ -102,16 +140,16 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     for path in all_patch_paths:
         os.remove(path)
 
-    logger.info(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
+    print(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
 def plot_losses(losses, config, config_name, modelling_folder, rank, logger):
     """
     Plot the train and validation losses from model training.
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
-    multi_scale = True if len(config["scales"]) > 1 else False
+    multi_scale = True if len(config["output_scales"]) > 1 else False
     loss_types = ["total_train_losses"] + [loss_type for loss_type in losses.keys() if "train" not in loss_type and "epoch" not in loss_type and "local" not in loss_type]
-    colours = ["red", "deepskyblue", "blue", "darkblue", "royalblue"][:len(loss_types)]
+    colours = ["red", "midnightblue", "deepskyblue", "royalblue", "cyan"][:len(loss_types)]
 
     for loss_type, colour in zip(loss_types, colours):
         local_loss_type = "_".join(loss_type.split("_")[:-1]) + "_local_losses"
@@ -147,17 +185,20 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not label & comparison")
     parser.add_argument('-b', '--test_border', default=0, help="Print a border around the test set images, with the given pixel size")
 
+    parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
+    parser.add_argument('--threshold', type=float, default=0.05, help="Specify a threshold for the flood proportion.")
+    parser.add_argument('--precision', type=int, default=1, help="Specify the precision for the classification evaluation.")
+
     args = parser.parse_args()
 
     utils.check_paths(args)
     utils.check_cuda()
-    logger = utils.get_logger()
     args.gpu = int(args.gpu) if args.gpu != "cpu" and args.gpu != "ddp" else args.gpu
 
-    config, config_name = utils.load_config(args.config_path, logger)
+    config, config_name = utils.load_config(args.config_path)
     num_epochs = args.epochs if args.epochs else config['number_epochs']
-    model = utils.load_model(config, rank=args.gpu, logger=logger, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
+    model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
 
     visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
-                          device=args.gpu, logger=logger, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                          pred_only=args.pred_only, test_border=int(args.test_border))
+                          device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
+                          pred_only=args.pred_only, test_border=int(args.test_border), classification=args.classification, threshold=args.threshold, precision=args.precision)

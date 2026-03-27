@@ -3,6 +3,7 @@ import torch
 import os
 import yaml
 import sys
+import numpy as np
 import modelling.architectures as architectures
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -47,7 +48,15 @@ def load_config(config_path, logger=None):
         config = yaml.safe_load(file)
 
     config_name = config_path.split("/")[-1].split(".")[0]
-    config["num_classes"] = 4 if config["separate_flood_trace_label"] else 3
+
+    config["num_classes"] = 1 if config.get("loss_function", "cross entropy").lower()=="dice" else 3
+
+    # input and outut scales list
+    if config["architecture"].lower() == "branchedlocalunet":
+        config["output_scales"] = ["local"]
+    else:
+        config["output_scales"] = config["scales"]
+
     class_features = ["soil_class", "land_cover"]
     config["class_features_exist"] = any(feature in class_features for feature in config["features"])
     config["num_class_features"] = sum([feature in class_features for feature in config["features"]])
@@ -57,7 +66,7 @@ def load_config(config_path, logger=None):
 
     return config, config_name
 
-def load_model(config, rank, logger, ddp, pretrained_path=False):
+def load_model(config, rank, ddp, logger=False, pretrained_path=False):
 
     # load the model architecture
     if config["architecture"].lower()=="basicunet":
@@ -66,6 +75,8 @@ def load_model(config, rank, logger, ddp, pretrained_path=False):
         org_model = architectures.ChainedUNet(config)
     elif config["architecture"].lower()=="branchedunet":
         org_model = architectures.BranchedUNet(config)
+    elif config["architecture"].lower()=="branchedlocalunet":
+        org_model = architectures.BranchedLocalUNet(config)
     else:
         raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 
@@ -81,8 +92,9 @@ def load_model(config, rank, logger, ddp, pretrained_path=False):
         model = org_model
     if rank != "cpu":
         device_name = [torch.cuda.get_device_name(device_id) for device_id in list(range(torch.cuda.device_count()))][rank]
-        logger.info(f"Model loaded onto: {device_name} (GPU {rank})")
-    else:
+        if logger:
+            logger.info(f"Model loaded onto: {device_name} (GPU {rank})")
+    elif logger:
         logger.info(f"Model loaded onto: CPU")
     
     return model
@@ -100,3 +112,35 @@ def mask_to_string(mask_desc):
         mask_desc = mask_desc.replace(punctuation, "")
     mask_desc = mask_desc.replace(",", "_")
     return mask_desc
+
+def convert_to_classification(pred, label, config):
+
+    # threshold/sensitivity: the proportion threshold to classify a patch as flooded, e.g. 0.1 means IF >= 10% pixels flooded THEN patch is "flooded"
+    # precision/resolution: how many times to divide the patch. 1 means classify whole patch. 2 means split into 4 smaller patches. 256 means exact segmentation.
+
+    uses_dice = config.get("loss_function", "cross entropy").lower()=="dice"
+    flood_class = 1 if uses_dice else 2
+    invalid_class = 0 if not uses_dice else 5
+    splits = np.array_split(np.arange(256), config["precision"])
+    
+    for index in range(label.shape[0]):
+        for data_name in [label, pred]:
+            for row_index in splits:
+                for col_index in splits:
+
+                    start_col, end_col = row_index[0], row_index[-1] + 1
+                    start_row, end_row = col_index[0], col_index[-1] + 1
+                    subpatch = data_name[index, :, :][start_col:end_col, start_row:end_row]
+
+                    valid_pixels = (subpatch != invalid_class).sum().float()
+                    if valid_pixels > 0:
+                        proportion_flooded = (subpatch == flood_class).sum().float() / valid_pixels
+                    else:
+                        proportion_flooded = torch.tensor(0.0, device=subpatch.device)
+
+                    if proportion_flooded > config["threshold"]:
+                        data_name[index, :, :][start_col:end_col, start_row:end_row] = 1
+                    else:
+                        data_name[index, :, :][start_col:end_col, start_row:end_row] = 0
+    
+    return pred, label
