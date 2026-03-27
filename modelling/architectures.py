@@ -118,7 +118,7 @@ class BasicUNet(nn.Module):
         self.in_channels = self.in_channels * len(config["scales"])
         self.dropout = config["dropout"]
         self.start_filts = start_filts
-        self.depth = depth
+        self.depth = config.get("depth", 5)
         self.down_convs = []
         self.up_convs = []
         self.feature_classes_exist = False
@@ -179,7 +179,7 @@ class ChainedUNet(nn.Module):
         self.in_channels = utils.find_num_channels(config)
         self.dropout = config["dropout"]
         self.start_filts = start_filts
-        self.depth = depth
+        self.depth = config.get("depth", 5)
         self.feature_classes_exist = False
         if config["class_features_exist"]:
              self.feature_classes_exist = True
@@ -313,11 +313,11 @@ class BranchedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.use_attention = config["use_attention"]
+        self.use_attention = config.get("use_attention", True)
         self.dropout = config["dropout"]
         self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
-        self.depth = depth
+        self.depth = config.get("depth", 5)
         bottleneck_channels = start_filts * (2 ** (depth - 1))
 
         self.feature_classes_exist = False
@@ -457,3 +457,130 @@ class BranchedUNet(nn.Module):
         if "basin" in self.scales:
             predictions["basin_pred"] = basin_pred
         return predictions
+    
+class BranchedLocalUNet(nn.Module):
+    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
+        super(BranchedLocalUNet, self).__init__()
+
+        self.up_mode = up_mode
+        self.num_classes = config["num_classes"]
+        self.local_weight = config["local_weight"]
+        self.context_weight = config["context_weight"]
+        self.basin_weight = config["basin_weight"]
+        self.use_attention = config.get("use_attention", True)
+        self.dropout = config["dropout"]
+        self.in_channels = utils.find_num_channels(config)
+        self.start_filts = start_filts
+        self.depth = config.get("depth", 5)
+        bottleneck_channels = start_filts * (2 ** (depth - 1))
+
+        self.feature_classes_exist = False
+        if config["class_features_exist"]:
+             self.feature_classes_exist = True
+             self.num_class_features = config["num_class_features"]
+             self.embeddings = create_embeddings(config)
+        self.scales = config["scales"]
+
+        if "basin" in self.scales:
+            self.basin_down_convs = []
+            for i in range(depth):
+                ins = self.in_channels if i == 0 else outs
+                outs = self.start_filts*(2**i)
+                pooling = True if i < depth-1 else False
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                self.basin_down_convs.append(down_conv)
+            self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
+
+        if "context" in self.scales:
+            self.context_down_convs = []
+            for i in range(depth):
+                ins = self.in_channels if i == 0 else outs
+                outs = self.start_filts*(2**i)
+                pooling = True if i < depth-1 else False
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                self.context_down_convs.append(down_conv)
+            self.context_down_convs = nn.ModuleList(self.context_down_convs)
+            if "basin" in self.scales:
+                self.context_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+                
+        self.local_down_convs = []
+        self.up_convs = []
+        for i in range(depth):
+            ins = self.in_channels if i == 0 else outs
+            outs = self.start_filts*(2**i)
+            pooling = True if i < depth-1 else False
+            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+            self.local_down_convs.append(down_conv)
+        for i in range(depth-1):
+            ins = outs
+            outs = ins // 2
+            up_conv = UpConv(ins, outs, up_mode=up_mode, num_scales=len(self.scales), dropout=self.dropout)
+            self.up_convs.append(up_conv)
+        self.local_down_convs = nn.ModuleList(self.local_down_convs)
+        self.up_convs = nn.ModuleList(self.up_convs)
+        self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
+        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+
+    def forward(self, data):
+
+        final_features = {}
+
+        if "basin" in self.scales:
+            basin_encoder_outs = []
+            if self.feature_classes_exist:
+                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+            else:
+                basin = data[f"basin_features"]
+            basin = basin * self.basin_weight
+            for i, module in enumerate(self.basin_down_convs):
+                basin, basin_before_pool = module(basin)
+                basin_encoder_outs.append(basin_before_pool)
+            final_features["basin"] = basin
+
+        if "context" in self.scales:
+            context_encoder_outs = []
+            if self.feature_classes_exist:
+                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+            else:
+                context = data[f"context_features"]
+            context = context * self.context_weight
+            for i, module in enumerate(self.context_down_convs):
+                context, context_before_pool = module(context)
+                context_encoder_outs.append(context_before_pool)
+            final_features["context"] = context
+
+        local_encoder_outs = []
+        if self.feature_classes_exist:
+            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+        else:
+            local = data[f"local_features"]
+        local = local * self.local_weight
+        for i, module in enumerate(self.local_down_convs):
+            local, local_before_pool = module(local)
+            local_encoder_outs.append(local_before_pool)
+        final_features["local"] = local
+
+        if "basin" in self.scales:
+            if "context" in self.scales:
+                context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
+            else:
+                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
+        else:
+            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        x = local_attended_higher
+        for i, module in enumerate(self.up_convs):
+            up_features = []
+            if "basin" in self.scales:
+                basin_before_pool = basin_encoder_outs[-(i+2)]
+                up_features.append(basin_before_pool)
+            if "context" in self.scales:
+                context_before_pool = context_encoder_outs[-(i+2)]
+                up_features.append(context_before_pool)
+            local_before_pool = local_encoder_outs[-(i+2)]
+            up_features.append(local_before_pool)
+            before_pool = torch.cat(up_features, dim=1)
+            x = module(before_pool, x)
+
+        return {"local_pred": self.local_final(x)}
