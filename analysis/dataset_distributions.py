@@ -9,8 +9,6 @@ from scipy import stats
 from collections import defaultdict
 import geopandas as gpd
 from itertools import combinations
-from sklearn.metrics import mutual_info_score
-from dcor import distance_correlation
 
 def calculate_dataset_distributions(data_folder, scale):
     """
@@ -18,8 +16,8 @@ def calculate_dataset_distributions(data_folder, scale):
     """
 
     features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "soil_class", "label", "flow_accumulation",
-                                                                                   "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1"],
-                                                                                   [1, 1, 1, 1, 1, 1, 2, 2, 12, 3]) for band_index in range(feature_count)]
+                                                                                   "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "summary_precipitation"],
+                                                                                   [1, 1, 1, 1, 1, 1, 2, 2, 12, 3, 3]) for band_index in range(feature_count)]
     features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
     for feature, band in tqdm(features):
         if scale == "local":
@@ -28,7 +26,7 @@ def calculate_dataset_distributions(data_folder, scale):
             paths = [path.path for path in os.scandir(f"{data_folder}/{scale}/{feature}/") if path.path.endswith(".tif")]
         feature_value_counts = []
 
-        for path in paths:
+        for path in tqdm(paths):
             raster = tf.imread(path)
             if raster.ndim == 2: raster = np.expand_dims(raster, axis=-1)
             raster = raster[:, :, band]
@@ -42,19 +40,18 @@ def calculate_dataset_distributions(data_folder, scale):
         feature_value_counts_path = f"{data_folder}/metadata/dataset_distributions_{scale}.csv"
         feature_value_counts.to_csv(feature_value_counts_path, mode="a", header=not os.path.exists(feature_value_counts_path), index=False)
 
-def calculate_dataset_associations(data_folder):
+def calculate_dataset_correlations(data_folder):
     """
-    Calculate the correlations, mutual information and distance correlations between all of the features.
+    Calculate the correlations between all of the features.
     """
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "flow_accumulation", "soil_moisture_one_day", 
-                                                                                   "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_direction", "precipitation"],
-                                                                                   [1, 1, 1, 1, 2, 2, 11, 2, 2, 16]) for band_index in range(feature_count)]
-    associations = {f"{class_type}_{algorithm}": defaultdict(list) for class_type in ["all", "flood", "non_flood"] 
-                    for algorithm in ["correlation", "mutual_information", "distance_correlation"]}
+                                                                                   "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_direction", "precipitation", "summary_precipitation"],
+                                                                                   [1, 1, 1, 1, 2, 2, 11, 2, 2, 16, 3]) for band_index in range(feature_count)]
+    correlations = {f"{class_type}_correlation": defaultdict(list) for class_type in ["all", "flood", "non_flood"]}
 
-    for index in tqdm(range(len(raster_extents))):
+    for index in tqdm(range(208, len(raster_extents))):
 
         subevent = raster_extents.loc[index, "subevent"]
         feature_data = {"all":{}, "flood":{}, "non_flood":{}}
@@ -76,12 +73,10 @@ def calculate_dataset_associations(data_folder):
 
         for class_type in ["all", "flood", "non_flood"]:
             for feature_a, feature_b in combinations(feature_data[class_type].keys(), 2):
-                associations[f"{class_type}_correlation"][f"{feature_a}-{feature_b}"].append(stats.pearsonr(feature_data[class_type][feature_a], feature_data[class_type][feature_b]).statistic.item())
-                associations[f"{class_type}_mutual_information"][f"{feature_a}-{feature_b}"].append(mutual_info_score(feature_data[class_type][feature_a], feature_data[class_type][feature_b]))
-                associations[f"{class_type}_distance_correlation"][f"{feature_a}-{feature_b}"].append(distance_correlation(feature_data[class_type][feature_a].astype(float), feature_data[class_type][feature_b].astype(float)).item())
-
-        for key in associations:
-            pd.DataFrame(associations[key]).to_csv(f"{data_folder}/metadata/associations/feature_{key}.csv", index=False)
+                correlations[f"{class_type}_correlation"][f"{feature_a}-{feature_b}"].append(stats.pearsonr(feature_data[class_type][feature_a], feature_data[class_type][feature_b]).statistic.item())
+                
+        for key in correlations:
+            pd.DataFrame(correlations[key]).to_csv(f"{data_folder}/metadata/associations/temp_feature_{key}.csv", index=False)
 
     print("Complete!", flush=True)
 
@@ -90,12 +85,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Calculate the distributions of each of the features.")
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument('--distributions', action="store_true", default=False, help="Calculate the dataset distributions.")
-    parser.add_argument('--associations', action="store_true", default=False, help="Calculate the dataset feature associations.")
+    parser.add_argument('--correlations', action="store_true", default=False, help="Calculate the dataset feature correlations.")
     parser.add_argument('--scale', default="local", help="The scale at which to calculate the dataset distributions.")
     args = parser.parse_args()
 
     if args.distributions:
         calculate_dataset_distributions(args.data_folder, args.scale)
 
-    if args.associations:
-        calculate_dataset_associations(args.data_folder)
+    if args.correlations:
+        calculate_dataset_correlations(args.data_folder)
