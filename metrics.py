@@ -69,14 +69,18 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
         metrics.update({key: [str(value)] for key, value in config.items()})
 
         # calculate metrics from the model predictions
-        for scale in config["output_scales"]:
-            for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
-                metric = metrics_function(predictions[scale], labels[scale])
-                metric = metric[2] if not binary_prediction else metric
-                metrics[f"{metrics_name}_{scale}"] = [f"{metric.item():.3f}"]
-                # if not binary_prediction:
-                 #metric = iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[2]
-                 #metrics[f"iou_{scale}"] = [f"{metric.item():.3f}"]
+        for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
+            for scale in config["output_scales"]:
+                for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
+                    if binary_prediction and class_name=="no_flood":
+                        metric = metrics_function(1-predictions[scale], 1-labels[scale])
+                    else:
+                        metric = metrics_function(predictions[scale], labels[scale])
+                    metric = metric[class_index] if not binary_prediction else metric
+                    metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
+                    # if not binary_prediction:
+                    #metric = iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[2]
+                    #metrics[f"iou_{scale}"] = [f"{metric.item():.3f}"]
 
         # save the metrics results
         metrics = pd.DataFrame(metrics)

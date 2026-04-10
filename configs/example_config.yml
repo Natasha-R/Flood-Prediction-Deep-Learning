@@ -1,6 +1,4 @@
-architecture: "ChainedUNet"
-use_attention_fusion: False
-# BasicUNet, ChainedUNet, FusedUNet, FusedBranchedUNet, MultiFusedBranchedUNet
+architecture: "BranchedUNet"
 
 features: ["dem", "sentinel1", "sentinel2", "soil_bulk_density", "soil_moisture_one_day", "precipitation", "flow_accumulation", "flow_direction", "soil_class", "land_cover", "permanent_water"]
 
@@ -8,16 +6,17 @@ scales: ["local", "context", "basin"]
 local_weight: 1
 context_weight: 0.25
 basin_weight: 0.25
-class_weights: [0, 1, 1]
-separate_flood_trace_label: False
 
+class_weights: [0, 0.775, 1.225]
+use_scheduler: False
+loss_function: "cross entropy"
 number_epochs: 50
 learning_rate: 0.0001
-weight_decay: 0
-
+dropout: 0.1
+weight_decay: 0.0001
 batch_size: 32
 number_workers: 8
 
-save_model_on_epoch: 10
+save_model_on_epoch: 5
 
-data_subset_file: "data_subset_patches"
+data_subset_file: "testing_data_subset"

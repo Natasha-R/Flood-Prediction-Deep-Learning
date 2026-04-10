@@ -11,7 +11,6 @@ from metrics import calculate_metrics
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from segmentation_models_pytorch.losses import DiceLoss
-from modelling.focal_loss import FocalLoss
 
 def setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
@@ -44,8 +43,12 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
         else:
             loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
         optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
-
+        if config.get("use_scheduler", True):
+            use_scheduler = True
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=config["learning_rate"], epochs=config["number_epochs"], steps_per_epoch=len(data_loaders["train"]))
+        else:
+            use_scheduler = False
+            
         losses = {f"total_{subset}_losses": [] for subset in subsets}
         losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
         losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
@@ -77,7 +80,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, ddp=Fals
                 optimizer.step()
                 losses["epoch_train_losses"].append(loss.item())
                 losses["epoch_train_local_losses"].append(local_losses)
-                scheduler.step()
+                if use_scheduler:
+                    scheduler.step()
                 
             model.eval()
             with torch.no_grad():
