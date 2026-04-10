@@ -97,72 +97,6 @@ def create_raster_metadata(data_folder):
     metadata_folder = f"{data_folder}/metadata"
     extent.to_file(f"{metadata_folder}/raster_extent.geojson")
 
-def create_empty_patch_csv(data_folder):
-    """
-    Create an empty csv, containing a row for each patch.
-    """
-    patches = os.listdir(f"{data_folder}/local/label")
-    patches.sort()
-    events = [patch.split("_")[0] for patch in patches]
-    subevents = ["_".join(patch.split("_")[:2]) for patch in patches]
-    subset = pd.DataFrame({"patch": patches, "event": events, "subevent": subevents})
-    subset["subset"] = None
-    subset.to_csv(f"{data_folder}/metadata/empty_data_subset.csv", index=False)
-
-def determine_data_split(data_folder):
-    """
-    Create metadata describing the main split of the dataset into train, validation and test subsets.
-    """
-    # get all of the available patches
-    all_patches = os.listdir(f"{data_folder}/local/label")
-    all_patches.sort()
-
-    # define the patches used for the validation and test subsets
-    patch_subsets = {"val_patches": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR465_2020-09-24", "EMSR517_2021-07-18", "EMSR634_2022-09-18"])][1::2],
-                    "val_del_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR788_2025-02-04"])],
-                    "test_del_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR763_2024-10-07"])],
-                    "val_subevent": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR770_2024-10-08"])],
-                    "val_other": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR764_2024-09-23"])],
-                    "test_timing": [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR664_2023-05-21"])],
-                    }
-    eval_patches = [patch for patch_subset in patch_subsets.values() for patch in patch_subset]
-
-    # exclude patches that are in subevents associated with the validation and test data, to prevent bias
-    excluded = ["EMSR388_2019-09-18", # temporarily excluded while sentinel-2 data is unavailable
-                "EMSR664_2023-05-17", "EMSR664_2023-05-18", "EMSR664_2023-05-20", "EMSR664_2023-05-22", # excluded from timing
-                "EMSR465_2020-09-20", "EMSR517_2021-07-15", "EMSR517_2021-07-16", "EMSR517_2021-07-20", "EMSR517_2021-07-21" # excluded from patches
-                "EMSR634_2022-09-16", "EMSR764_2024-09-30", # excluded from other
-                "EMSR788_2025-02-05"] # excluded from del subevent due to bad annotation
-    all_patches = [patch for patch in all_patches if not any(subevent in patch for subevent in excluded)]
-
-    # include only events that are in Europe and which were not caused by snow melt
-    # comment out to include all events within the training data
-    events = pd.read_csv(f"{data_folder}/metadata/subevent_descriptions.csv")
-    events = events[events["continent"]=="Europe"]
-    events = events[events["flood_cause"] != "snow_melt"]
-    included_events = set(events["event"])
-    all_patches = [patch for patch in all_patches if any(subevent in patch for subevent in included_events)]
-
-    # extract the training patches
-    patch_subsets["train"] = list(set(all_patches)-set(eval_patches))
-
-    # create the subset dataframe
-    subset_df = pd.concat([pd.DataFrame({"patch":patches, "subset":[f"{patches_name}"]*len(patches)}) for patches_name, patches in patch_subsets.items()])
-    subset_df["event"] = subset_df["patch"].str.split("_").str[0]
-    subset_df["subevent"] = subset_df["patch"].str.split("_").str[0] + "_" + subset_df["patch"].str.split("_").str[1]
-    subset_df = subset_df.to_csv(f"{data_folder}/subsets/europe_data_subset.csv", index=False)
-
-    # create an alternate data subset for a single event only
-    all_patches = os.listdir(f"{data_folder}/local/label")
-    val_patches = [patch for patch in all_patches if any(subevent in patch for subevent in ["EMSR788_2025-02-04"])]
-    train_patches = [patch for patch in all_patches if any(event in patch for event in ["EMSR788"])]
-    train_patches = list(set(train_patches)-set(val_patches))
-    subset_df = pd.concat([pd.DataFrame({"patch":val_patches, "subset":["val"]*len(val_patches)}),
-                           pd.DataFrame({"patch":train_patches, "subset":["train"]*len(train_patches)})])
-    subset_df["event"] = subset_df["patch"].str.split("_").str[0]
-    subset_df["subevent"] = subset_df["patch"].str.split("_").str[0] + "_" + subset_df["patch"].str.split("_").str[1]
-    subset_df.to_csv(f"{data_folder}/subsets/del_event_val_data_subset.csv", index=False)
-
 def find_wider_scale_bounds(data_folder, global_folder):
     """
     Find the boundaries of the wider scales (context and basin) from the local patch bounds.
@@ -262,7 +196,6 @@ if __name__ == "__main__":
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--create_aoi_metadata", action="store_true", default=False, help="Create metadata describing the AOIs.")
     parser.add_argument("--create_raster_metadata", action="store_true", default=False, help="Create metadata describing the rasters.")
-    parser.add_argument("--determine_data_split", action="store_true", default=False, help="Create metadata describing the split of the dataset into train, validation and test subsets.")
     parser.add_argument("--find_wider_scale_bounds", action="store_true", default=False, help="Find the boundaries of the wider scales from the local patch bounds.")
     
     args = parser.parse_args()
@@ -272,9 +205,6 @@ if __name__ == "__main__":
 
     if args.create_raster_metadata:
         create_raster_metadata(args.data_folder)
-
-    if args.determine_data_split:
-        determine_data_split(args.data_folder)
 
     if args.find_wider_scale_bounds:
         find_wider_scale_bounds(args.data_folder, args.global_folder)
