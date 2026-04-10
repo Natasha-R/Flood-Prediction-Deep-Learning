@@ -57,6 +57,9 @@ def load_config(config_path, logger=None):
     else:
         config["output_scales"] = config["scales"]
 
+    if "indices" in config["features"]:
+        config["features"] = [feature for feature in config["features"] if feature != "indices"] + ["indices"]
+
     class_features = ["soil_class", "land_cover"]
     config["class_features_exist"] = any(feature in class_features for feature in config["features"])
     config["num_class_features"] = sum([feature in class_features for feature in config["features"]])
@@ -102,7 +105,7 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
 def find_num_channels(config):
     channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
                                 "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3, "land_cover":3,
-                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2}
+                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2, "indices":5, "summary_precipitation":3}
     in_channels = sum([channels_in_features[feature] for feature in config["features"]])
     return in_channels
 

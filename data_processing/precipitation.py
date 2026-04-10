@@ -89,14 +89,18 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
     # set up and import metadata
     if scale == "local":
         precipitation_folder = f"{data_folder}/full_subevent/raster_precipitation"
+        precipitation_summary_folder = f"{data_folder}/full_subevent/raster_summary_precipitation"
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     else: # if scale == "context" or scale == "basin"
         raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         precipitation_folder = f"{data_folder}/{scale}/precipitation"
+        precipitation_summary_folder = f"{data_folder}/{scale}/summary_precipitation"
     global_precipitation_folder = f"{global_folder}/global_precipitation"
     if not os.path.isdir(precipitation_folder):
         os.mkdir(precipitation_folder)
+    if not os.path.isdir(precipitation_summary_folder):
+        os.mkdir(precipitation_summary_folder)
     
     for index in tqdm(range(len(raster_extents)), f"Create precipitation rasters for {scale} scale"):
 
@@ -106,13 +110,14 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
         height = int(raster_extents["height"].iloc[index])
         width = int(raster_extents["width"].iloc[index])
         subevent = raster_extents["subevent"][index]
-        num_of_bands = 16
 
         if scale == "local":
             file_name = f"{precipitation_folder}/{subevent}.tif"
+            summary_file_name = f"{precipitation_summary_folder}/{subevent}.tif"
         else: # if scale == "context" or scale == "basin"
             patch = raster_extents["patch"].iloc[index]
             file_name = f"{precipitation_folder}/{patch}"
+            summary_file_name = f"{precipitation_summary_folder}/{patch}"
 
         if os.path.isfile(file_name):
             continue
@@ -127,12 +132,13 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
         days_29_42 = [rasterio.open(path) for path in global_precipitation_paths[0:14]]
         
         # aggregate the first 28 days into two 14 days sums
+        sum_days_1_14 = np.sum([file.read(1) for file in days_1_14], axis=0)
         sum_days_15_28 = np.sum([file.read(1) for file in days_15_28], axis=0)
         sum_days_29_42 = np.sum([file.read(1) for file in days_29_42], axis=0)
         
         # update the metadata
         meta = days_29_42[0].meta.copy()
-        meta.update({"count": num_of_bands})
+        meta.update({"count": 16})
         meta.pop("nodata", None)
 
         # create a geotiff with all of the (global) precipitation bands (days)
@@ -142,38 +148,49 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
             file.write(sum_days_15_28, 15)
             file.write(sum_days_29_42, 16)
             file.nodata = None
-
-        # match the precipitation geotiff to the subevent raster's extent
-        gdal.Warp(file_name, file_name, format='GTiff', creationOptions=["COMPRESS=LZW", "BIGTIFF=YES"],
-                  resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
+        meta.update({"count": 3})
+        with rasterio.open(summary_file_name, "w", **meta, compress="LZW") as file:
+            file.write(sum_days_1_14, 1)
+            file.write(sum_days_15_28, 2)
+            file.write(sum_days_29_42, 3)
+            file.nodata = None
 
         # import the label raster with aois to match the precipitation raster to
         with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)
 
-        # import the precipitation data
-        with rasterio.open(file_name) as precipitation_file:
-            precipitation_layers = [precipitation_file.read(index+1) for index in range(num_of_bands)]
-            meta = precipitation_file.meta.copy()
+        for file, num_of_bands in zip([file_name, summary_file_name], [16, 3]):
 
-        if scale == "local":
-            # remove the data where there is no AOI
-            precipitation_layers = [np.where(reference_label == 0, 0, precipitation_layer) for precipitation_layer in precipitation_layers]
+            # match the precipitation geotiff to the subevent raster's extent
+            gdal.Warp(file, file, format='GTiff', creationOptions=["COMPRESS=LZW", "BIGTIFF=YES"],
+                    resampleAlg="bilinear", width=width, height=height, outputBounds=bounds)
 
-        # scale the precipitation data by 10 and convert to uint16
-        precipitation_layers = [precipitation_layer*10 for precipitation_layer in precipitation_layers]
-        precipitation_layers = [np.round(precipitation_layer).astype(np.uint16) for precipitation_layer in precipitation_layers]
-        for precipitation_layer in precipitation_layers:
-            if np.max(precipitation_layer) > np.iinfo(np.uint16).max:
-                print(f"Subevent {subevent} out of range for uint16")
-        meta.update({"dtype": "int16"})
+            # import the precipitation data
+            with rasterio.open(file) as precipitation_file:
+                precipitation_layers = [precipitation_file.read(index+1) for index in range(num_of_bands)]
+                meta = precipitation_file.meta.copy()
 
-        # save the final precipitation geotiff
-        precipitation_descriptions = [f"precipitation_day_{index}" for index in range(1, 15)] + ["precipitation_days_15_28", "precipitation_days_29_42"]
-        with rasterio.open(file_name, "w", **meta, compress="LZW") as file:
-            for index in range(num_of_bands):
-                file.write(precipitation_layers[index], index+1)
-                file.set_band_description(index+1, precipitation_descriptions[index])
+            if scale == "local":
+                # remove the data where there is no AOI
+                precipitation_layers = [np.where(reference_label == 0, 0, precipitation_layer) for precipitation_layer in precipitation_layers]
+
+            # scale the precipitation data by 10 and convert to uint16
+            precipitation_layers = [precipitation_layer*10 for precipitation_layer in precipitation_layers]
+            precipitation_layers = [np.round(precipitation_layer).astype(np.uint16) for precipitation_layer in precipitation_layers]
+            for precipitation_layer in precipitation_layers:
+                if np.max(precipitation_layer) > np.iinfo(np.uint16).max:
+                    print(f"Subevent {subevent} out of range for uint16")
+            meta.update({"dtype": "int16"})
+
+            # save the final precipitation geotiff
+            if num_of_bands == 16:
+                precipitation_descriptions = [f"precipitation_day_{index}" for index in range(1, 15)] + ["precipitation_days_15_28", "precipitation_days_29_42"]
+            else:
+                precipitation_descriptions = ["precipitation_days_1_14", "precipitation_days_15_28", "precipitation_days_29_42"]
+            with rasterio.open(file, "w", **meta, compress="LZW") as file:
+                for index in range(num_of_bands):
+                    file.write(precipitation_layers[index], index+1)
+                    file.set_band_description(index+1, precipitation_descriptions[index])
 
         # close the open original global precipitation date files
         for group in [days_29_42, days_15_28, days_1_14]:

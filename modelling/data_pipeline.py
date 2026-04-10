@@ -54,6 +54,8 @@ class FloodDataset(torch.utils.data.Dataset):
           self.scales = self.config["scales"]
           self.class_features = ["soil_class", "land_cover"]
           self.class_features_exist = config["class_features_exist"]
+          self.indices_exist = "indices" in self.config["features"]
+          self.features = [feature for feature in self.config["features"] if feature != "indices"]
 
           # subset the data patches based on a particular train/validation split, subevent, or event
           data_subset = pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")
@@ -76,8 +78,20 @@ class FloodDataset(torch.utils.data.Dataset):
      def __len__(self):
           return len(self.patches)
      
+     def calculate_indices(self, index, scale):
+          sentinel2 = tf.imread(f"{self.data_folder}/{scale}/sentinel2/{self.patches[index]}").astype(np.float32)
+          ndvi = (sentinel2[:, :, 6] - sentinel2[:, :, 2]) / ((sentinel2[:, :, 6] + sentinel2[:, :, 2]) + np.finfo("float32").eps)
+          ndmi = (sentinel2[:, :, 6] - sentinel2[:, :, 8]) / ((sentinel2[:, :, 6] + sentinel2[:, :, 8]) + np.finfo("float32").eps)
+          ndwi = (sentinel2[:, :, 1] - sentinel2[:, :, 6]) / ((sentinel2[:, :, 1] + sentinel2[:, :, 6]) + np.finfo("float32").eps)
+          cloud_time = sentinel2[:, :, 10:]
+          return np.concatenate([np.expand_dims(ndvi, 2), np.expand_dims(ndmi, 2), np.expand_dims(ndwi, 2), cloud_time], axis=2)
+
      def get_data(self, index, scale, class_feature):
-          return [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.config["features"] if ((feature in self.class_features) == class_feature)]
+
+          data = [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.features if ((feature in self.class_features) == class_feature)]
+          if self.indices_exist:
+               return data + [self.calculate_indices(index, scale)]
+          return data
      
      def get_label(self, index, scale):
           return tf.imread(f"{self.data_folder}/{scale}/label/{self.patches[index]}")
@@ -115,7 +129,7 @@ class ToTensor(object):
                data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
                # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area
                # after: 0: no data, 1: aoi, 2: flood
-               if self.config.get("flood_trace_label", "flood"):
+               if self.config.get("flood_trace_label", True):
                     data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # combine flood trace and flooded
                else:
                     data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to other
@@ -144,9 +158,10 @@ class Normalize(object):
           # define the number of bands contained within each feature
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
-                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover"], 
-                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1])}
-          self.non_transformed_features = ["permanent_water", "soil_class", "land_cover"]
+                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
+                                       "indices", "summary_precipitation"], 
+                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3])}
+          self.non_transformed_features = ["permanent_water", "soil_class", "land_cover", "indices"]
 
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           self.zscore_values = {}
@@ -177,9 +192,9 @@ class Normalize(object):
                feature += 2
                for band in [0, 1, 2, 9]:
                     feature[band] = torch.log(feature[band])
-          elif feature == "precipitation":
+          elif feature == "precipitation" or feature == "summary_precipitation":
                feature = torch.log(feature+1)
-
+          
           return torch.clamp((feature - self.zscore_values[feature_name]["shift"][:, None, None]) / self.zscore_values[feature_name]["scale"][:, None, None], min=-3, max=3)
           
      def __call__(self, data):
@@ -205,8 +220,9 @@ class MaskFeatures(object):
           self.class_features = [feature for feature in config["features"] if feature in ["soil_class", "land_cover"]]
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
-                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover"], 
-                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1])}
+                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
+                                       "indices", "summary_precipitation"], 
+                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3])}
           self.mask_features = mask_features
 
           self.feature_channels, self.class_feature_channels = {}, {}
@@ -285,8 +301,8 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
 
      # define the features to normalize
      features = [(feature_name, band_index) for feature_name, feature_count in 
-                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation"], 
-                     [1, 1, 2, 2, 12, 3, 1]) 
+                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation", "summary_precipitation"], 
+                     [1, 1, 2, 2, 12, 3, 1, 3]) 
                  for band_index in range(feature_count)]
      features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
 
@@ -313,7 +329,7 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
                     raster = raster + 2
                     if band == 0 or band == 1 or band == 2 or band == 9:
                          raster = np.log(raster)
-               elif feature == "precipitation":
+               elif feature == "precipitation" or feature == "summary_precipitation":
                     raster = np.log(raster+1)
                     
                # save the sum of the values, sum of their squares, and total number of values
@@ -339,6 +355,9 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
      for band in range(16):
           zscore["precipitation"][band]["shift"] = 0
           zscore["precipitation"][band]["scale"] = zscore["precipitation"][band]["max"]
+     for band in range(3):
+          zscore["summary_precipitation"][band]["shift"] = 0
+          zscore["summary_precipitation"][band]["scale"] = zscore["summary_precipitation"][band]["max"]
      for band in [10, 11]:
           zscore["sentinel2"][band]["shift"] = 1
           zscore["sentinel2"][band]["scale"] = zscore["sentinel2"][band]["max"]
@@ -351,6 +370,7 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
      # permanently save the values in a json file
      with open(f"{data_folder}/metadata/zscore.json", 'w') as file:
           json.dump(zscore, file)
+
 
 if __name__ == "__main__":
 
