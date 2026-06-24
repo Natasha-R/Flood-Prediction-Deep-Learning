@@ -156,6 +156,36 @@ def create_dem_scales(data_folder, global_folder, scale):
         for path in temp_tiles_paths:
             os.remove(path)
 
+def create_slope(data_folder, scale):
+
+    if scale=="local":
+        slope_folder = f"{data_folder}/full_subevent/raster_slope/"
+        dem_folder = f"{data_folder}/full_subevent/raster_dem/"
+    else:
+        slope_folder = f"{data_folder}/{scale}/slope/"
+        dem_folder = f"{data_folder}/{scale}/dem/"
+    if not os.path.isdir(slope_folder):
+        os.mkdir(slope_folder)
+
+    all_dems = os.listdir(dem_folder)
+    all_dems.sort()
+
+    for patch in tqdm(all_dems, desc=f"Creating slope patches at {scale}"):
+
+        gdal.DEMProcessing(f"{slope_folder}/{patch}", f"{dem_folder}/{patch}", 
+                           processing="slope", format="GTiff", creationOptions=["COMPRESS=LZW"], slopeFormat="percent")
+
+        with rasterio.open(f"{slope_folder}/{patch}") as file:
+            meta = file.meta.copy()
+            data = file.read(1)
+            meta.update({"dtype": "uint8"})
+            meta.pop("nodata", None)
+        data[data==-9999] = 0
+        data[data==255] = 254
+        with rasterio.open(f"{slope_folder}/{patch}", "w", **meta, compress="LZW") as file:
+            file.write(data, 1)
+            file.set_band_description(1, "slope")
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Create DEM files clipped to the extent of the AOIs, and save in rasters matching to the CEMS labels.")
@@ -164,7 +194,8 @@ if __name__ == "__main__":
     parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
     parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
     parser.add_argument("--create_dem_scales", action="store_true", default=False, help="Create patches of the DEM data at the context and basin scales.")
-    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: context or basin.")
+    parser.add_argument("--create_slope", action="store_true", default=False, help="Create patches for the slope.")
+    parser.add_argument("--scale", default="context", help="The scale at which to create raster files.")
 
     args = parser.parse_args()
 
@@ -176,3 +207,6 @@ if __name__ == "__main__":
 
     if args.create_dem_scales:
         create_dem_scales(args.data_folder, args.global_folder, args.scale)
+
+    if args.create_slope:
+        create_slope(args.data_folder, args.scale)

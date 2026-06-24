@@ -86,6 +86,8 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
     # load in any pretrained model weights
     if pretrained_path:
         org_model.load_state_dict(torch.load(pretrained_path, weights_only=False, map_location=torch.device(rank)))
+        if logger:
+            logger.info(f"Pretrained model weights loaded from {pretrained_path}")
 
     # put the model onto the GPU(s)
     org_model = org_model.to(rank)
@@ -105,7 +107,8 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
 def find_num_channels(config):
     channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
                                 "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3, "land_cover":3,
-                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2, "indices":5, "summary_precipitation":3}
+                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2, "indices":5, "summary_precipitation":3,
+                                "soil_vol_water":2, "slope":1, "hand":1}
     in_channels = sum([channels_in_features[feature] for feature in config["features"]])
     return in_channels
 
@@ -118,13 +121,13 @@ def mask_to_string(mask_desc):
 
 def convert_to_classification(pred, label, config):
 
-    # threshold/sensitivity: the proportion threshold to classify a patch as flooded, e.g. 0.1 means IF >= 10% pixels flooded THEN patch is "flooded"
-    # precision/resolution: how many times to divide the patch. 1 means classify whole patch. 2 means split into 4 smaller patches. 256 means exact segmentation.
+    # sensitivity: the proportion threshold to classify a patch as flooded, e.g. 0.1 means IF >= 10% pixels flooded THEN patch is "flooded"
+    # resolution: how many times to divide the patch. 1 means classify whole patch. 2 means split into 4 smaller patches. 256 means exact segmentation.
 
     uses_dice = config.get("loss_function", "cross entropy").lower()=="dice"
     flood_class = 1 if uses_dice else 2
     invalid_class = 0 if not uses_dice else 5
-    splits = np.array_split(np.arange(256), config["precision"])
+    splits = np.array_split(np.arange(256), config["resolution"])
     
     for index in range(label.shape[0]):
         for data_name in [label, pred]:
@@ -141,7 +144,7 @@ def convert_to_classification(pred, label, config):
                     else:
                         proportion_flooded = torch.tensor(0.0, device=subpatch.device)
 
-                    if proportion_flooded > config["threshold"]:
+                    if proportion_flooded > config["sensitivity"]:
                         data_name[index, :, :][start_col:end_col, start_row:end_row] = 1
                     else:
                         data_name[index, :, :][start_col:end_col, start_row:end_row] = 0

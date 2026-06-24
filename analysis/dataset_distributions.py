@@ -16,9 +16,11 @@ def calculate_dataset_distributions(data_folder, scale):
     """
 
     features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "soil_class", "label", "flow_accumulation",
-                                                                                   "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "summary_precipitation"],
-                                                                                   [1, 1, 1, 1, 1, 1, 2, 2, 12, 3, 3]) for band_index in range(feature_count)]
+                                                                                   "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "summary_precipitation",
+                                                                                   "soil_vol_water", "slope", "hand"],
+                                                                                   [1, 1, 1, 1, 1, 1, 2, 2, 12, 3, 3, 2, 1, 1]) for band_index in range(feature_count)]
     features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
+
     for feature, band in tqdm(features):
         if scale == "local":
             paths = [path.path for path in os.scandir(f"{data_folder}/full_subevent/raster_{feature}/") if path.path.endswith(".tif")]
@@ -47,8 +49,9 @@ def calculate_dataset_correlations(data_folder):
 
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     features = [(feature_name, band_index) for feature_name, feature_count in zip(["dem", "permanent_water", "soil_bulk_density", "flow_accumulation", "soil_moisture_one_day", 
-                                                                                   "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_direction", "precipitation", "summary_precipitation"],
-                                                                                   [1, 1, 1, 1, 2, 2, 11, 2, 2, 16, 3]) for band_index in range(feature_count)]
+                                                                                   "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_direction", "precipitation", "summary_precipitation",
+                                                                                   "soil_vol_water", "slope", "hand"],
+                                                                                   [1, 1, 1, 1, 2, 2, 11, 2, 2, 16, 3, 2, 1, 1]) for band_index in range(feature_count)]
     correlations = {f"{class_type}_correlation": defaultdict(list) for class_type in ["all", "flood", "non_flood"]}
 
     for index in tqdm(range(208, len(raster_extents))):

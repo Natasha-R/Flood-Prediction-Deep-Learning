@@ -87,9 +87,9 @@ def create_features_local_patches(data_folder):
     raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
     subevent_patches = json.load(open(f"{data_folder}/metadata/subevent_patches.json"))
     features = ["precipitation", "dem", "permanent_water", "sentinel1", "sentinel2", "soil_moisture_one_week", "soil_moisture_one_day", "soil_class", "soil_bulk_density", 
-                "flow_accumulation", "flow_direction", "land_cover", "summary_precipitation"]
-    resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", "flow_accumulation": "bilinear",
-                    "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear",
+                "flow_accumulation", "flow_direction", "land_cover", "summary_precipitation", "soil_vol_water", "slope", "hand"]
+    resample_alg = {"precipitation": "bilinear", "dem": "bilinear", "sentinel1": "bilinear", "sentinel2": "bilinear", "flow_accumulation": "bilinear", "slope":"bilinear",
+                    "soil_moisture_one_week": "bilinear", "soil_moisture_one_day": "bilinear", "soil_bulk_density": "bilinear", "soil_vol_water":"bilinear", "hand":"bilinear",
                     "soil_class": "nearest", "permanent_water": "nearest", "flow_direction":"nearest", "land_cover": "nearest", "summary_precipitation":"bilinear"}
     for feature in features:
         if not os.path.isdir(f"{data_folder}/local/{feature}/"):

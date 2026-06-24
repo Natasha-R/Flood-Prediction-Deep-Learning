@@ -106,8 +106,9 @@ def create_cems_geojson(data_folder):
             if older_event:
                 for gdf in [obs, aoi]:
                     gdf.rename(columns={"interpret":"notation", "subtype":"event_type"}, inplace=True)
-            na_floods = (obs["event_type"].str.lower().str.contains("flood")) & (obs["notation"] == "Not Applicable")
-            obs.loc[na_floods, "notation"] = "flooded area"
+            if "event_type" in obs:
+                na_floods = (obs["event_type"].str.lower().str.contains("flood")) & (obs["notation"] == "Not Applicable")
+                obs.loc[na_floods, "notation"] = "flooded area"
 
             # add dates of recording to the observed event
             if not older_event:
@@ -115,7 +116,11 @@ def create_cems_geojson(data_folder):
                 db = gpd.read_file(db_path)
                 if "SRC_ID" in db.columns:
                     db.rename(columns={"SRC_ID": "src_id", "SRC_DATE":"src_date"}, inplace=True)
-                obs = obs.merge(db, how="left", left_on="dmg_src_id", right_on="src_id")
+                if len(obs) > 0:
+                    obs = obs.merge(db, how="left", left_on="dmg_src_id", right_on="src_id")
+                else:
+                    no_flooding = True
+                    obs = db
 
             # add an aoi for the subevent for each recorded date
             aoi["notation"] = "AOI"
@@ -125,8 +130,11 @@ def create_cems_geojson(data_folder):
             
             # create a single file for each subevent containing observed and aois
             aoi = aoi[["notation", "src_date", "geometry"]]
-            obs = obs[["src_date", "notation", "geometry"]]
-            obs = pd.concat([obs, aoi], ignore_index=True)
+            if not no_flooding:
+                obs = obs[["src_date", "notation", "geometry"]]
+                obs = pd.concat([obs, aoi], ignore_index=True)
+            else:
+                obs = aoi
             processed_obs.append(obs)
 
         # create a single file for the whole event, with corresponding raster values

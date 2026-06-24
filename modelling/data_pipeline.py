@@ -17,11 +17,11 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None):
+def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None, training=False):
      """
      Create a dataloader for a particular data subset, subevent or event.
      """
-     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_patch)
+     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_patch, training)
 
      if ddp: 
                loader = torch.utils.data.DataLoader(
@@ -47,7 +47,7 @@ class FloodDataset(torch.utils.data.Dataset):
      """
      The dataset for the flood data.
      """
-     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None):
+     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None, training=False):
           
           self.config = config
           self.data_folder = data_folder
@@ -73,7 +73,8 @@ class FloodDataset(torch.utils.data.Dataset):
           self.transform = transforms.Compose([ToTensor(config),
                                                Normalize(config, data_folder),
                                                MaskFeatures(config, mask_features),
-                                               MaskPatch(config, mask_patch)])
+                                               MaskPatch(config, mask_patch),
+                                               HorizontalFlip(training, subset)])
 
      def __len__(self):
           return len(self.patches)
@@ -143,6 +144,22 @@ class ToTensor(object):
                     data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])
 
           return data
+     
+class HorizontalFlip(object):
+
+     def __init__(self, training, subset):
+          self.training = training
+          self.subset = subset
+
+     def __call__(self, data):
+
+          if self.training and self.subset=="train" and random.choice([True, False]):
+               for key in data:
+                    data[key] = torch.flip(data[key], dims=[-1])
+               return data
+          
+          else:
+               return data
 
 class Normalize(object):
      def __init__(self, config, data_folder):
@@ -159,8 +176,8 @@ class Normalize(object):
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
                                        "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
-                                       "indices", "summary_precipitation"], 
-                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3])}
+                                       "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
+                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3, 2, 1, 1])}
           self.non_transformed_features = ["permanent_water", "soil_class", "land_cover", "indices"]
 
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
@@ -192,9 +209,9 @@ class Normalize(object):
                feature += 2
                for band in [0, 1, 2, 9]:
                     feature[band] = torch.log(feature[band])
-          elif feature == "precipitation" or feature == "summary_precipitation":
+          elif feature_name in ["precipitation", "summary_precipitation", "slope", "hand"]:
                feature = torch.log(feature+1)
-          
+
           return torch.clamp((feature - self.zscore_values[feature_name]["shift"][:, None, None]) / self.zscore_values[feature_name]["scale"][:, None, None], min=-3, max=3)
           
      def __call__(self, data):
@@ -221,8 +238,8 @@ class MaskFeatures(object):
           self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
                                   zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
                                        "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
-                                       "indices", "summary_precipitation"], 
-                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3])}
+                                       "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
+                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3, 2, 1, 1])}
           self.mask_features = mask_features
 
           self.feature_channels, self.class_feature_channels = {}, {}
@@ -301,8 +318,9 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
 
      # define the features to normalize
      features = [(feature_name, band_index) for feature_name, feature_count in 
-                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation", "summary_precipitation"], 
-                     [1, 1, 2, 2, 12, 3, 1, 3]) 
+                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation", "summary_precipitation",
+                      "soil_vol_water", "slope", "hand"], 
+                     [1, 1, 2, 2, 12, 3, 1, 3, 2, 1, 1]) 
                  for band_index in range(feature_count)]
      features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
 
@@ -329,7 +347,7 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
                     raster = raster + 2
                     if band == 0 or band == 1 or band == 2 or band == 9:
                          raster = np.log(raster)
-               elif feature == "precipitation" or feature == "summary_precipitation":
+               elif feature in ["precipitation", "summary_precipitation", "slope", "hand"]:
                     raster = np.log(raster+1)
                     
                # save the sum of the values, sum of their squares, and total number of values
@@ -366,11 +384,14 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
      for band in [0, 1]:
           zscore["flow_direction"][band]["shift"] = 0
           zscore["flow_direction"][band]["scale"] = 10000
+     zscore["slope"][0]["shift"] = 0
+     zscore["slope"][0]["scale"] = zscore["slope"][0]["max"]
+     zscore["hand"][0]["shift"] = 0
+     zscore["hand"][0]["scale"] = zscore["hand"][0]["max"]
 
      # permanently save the values in a json file
-     with open(f"{data_folder}/metadata/zscore.json", 'w') as file:
+     with open(f"{data_folder}/metadata/zscore_new.json", 'w') as file:
           json.dump(zscore, file)
-
 
 if __name__ == "__main__":
 

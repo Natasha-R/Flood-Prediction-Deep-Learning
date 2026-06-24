@@ -109,8 +109,7 @@ def main(data_folder, global_folder):
 
     # Create the Sentinel 2 rasters
     print(str(datetime.now()), "Creating Sentinel 2 rasters...", flush=True)
-    #for scale in ["local", "context", "basin"]:
-    for scale in ["context", "basin"]:
+    for scale in ["local", "context", "basin"]:
         find_sentinel2_availability(data_folder, scale)
         find_minimal_cloud_cover(data_folder, scale)
         download_sentinel2(data_folder, scale)
