@@ -14,16 +14,25 @@ from shapely.geometry import box
 import geopandas as gpd
 from metrics import convert_to_classification
 
+def hatch_mask(mask, spacing=8, thickness=1, direction="+"):
+    yy, xx = np.indices(mask.shape)
+    if direction == "+":
+        pattern = ((xx + yy) % spacing) < thickness
+    else:
+        pattern = ((xx - yy) % spacing) < thickness
+    hatch = mask & pattern
+    return hatch
+
 def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
-                          scale, patch, pred_only, test_border, classification, threshold, precision, mask_features=None, mask_patch=None):
+                          scale, patch, pred_only, border, classification, sensitivity, resolution, mask_features=None, mask_patch=None):
 
     loss_function = "cross entropy"
     if config.get("loss_function", "cross entropy").lower()=="dice":
         loss_function = "dice"
     if classification:
         config["classification_evaluation"] = classification
-        config["threshold"] = threshold
-        config["precision"] = precision
+        config["sensitivity"] = sensitivity
+        config["resolution"] = resolution
 
     # load the dataset
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_patch=mask_patch)
@@ -34,10 +43,10 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
         os.mkdir(path_folder)
 
     # define the colours for the visualisation
-    # 0: no data, 1: aoi, 2: flood, 4: val border, 5: test border
-    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 4:(255, 255, 255), 5:(152, 97, 255)} 
-    # 0 no data, 1: underpredict, 2: overpredict, 3: correct, 4: val border, 5: test border
-    matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(152, 97, 255)} 
+    # 0: no data, 1: aoi, 2: flood, 4: val border, 5: test border, 6: train border
+    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 4:(255, 255, 255), 5:(152, 97, 255), 6: (152, 97, 255)} 
+    # 0 no data, 1: underpredict, 2: overpredict, 3: correct, 4: val border, 5: test border, 6: train border
+    matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(152, 97, 255), 6: (152, 97, 255)} 
     all_patch_paths = []
 
     for patch_index in range(len(dataset)):
@@ -94,24 +103,29 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     full_subevent_meta.update({"height": full_subevent.shape[1], "width": full_subevent.shape[2],
                                "transform": full_subevent_transform, "dtype": "int8", "nodata": 0})
 
-    # mark a border around the val/test patches
-    if test_border > 0:
+    # mark a border around the patches
+    if border > 0:
         patch_subset = list(dataset.data_subset["subset"])
-        for other_subset, value in zip(["val", "test"], [4, 5]):
+        for other_subset, value in zip(["val", "test", "train"], [4, 5, 6]):
             patch_geometries = gpd.GeoDataFrame(geometry=[box(*all_patches[index].bounds) for index in range(len(dataset)) if other_subset in patch_subset[index]])
             if len(patch_geometries) > 0:
-                patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001)
-                patch_geometries = patch_geometries.geoms if patch_geometries.geom_type == "MultiPolygon" else [patch_geometries]
-                for geometry in patch_geometries:
+                # patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001)
+                # patch_geometries = patch_geometries.geoms if patch_geometries.geom_type == "MultiPolygon" else [patch_geometries]
+                for geometry in patch_geometries.geometry:
                     mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=np.int8).astype(bool)
-                    border_mask = (mask) & (~binary_erosion(mask, iterations=test_border))
+                    if other_subset == "train":
+                        hatch = hatch_mask(mask, spacing=50, thickness=border, direction="+")
+                        hatch |= hatch_mask(mask, spacing=50, thickness=border, direction="-")
+                        for band in range(3):
+                            full_subevent[band][hatch] = value
+                    border_mask = (mask) & (~binary_erosion(mask, iterations=border))
                     for band in range(3):
                         full_subevent[band][border_mask] = value
 
     # save the visualisation as geotiff, with predicted, ground truth label, and matching bands
     save_path = f"{path_folder}/{config_name}_{num_epochs}epochs_{scale}_{subevent}"
     if classification:
-        save_path = f"{save_path}_thresh{str(threshold).replace(".","-")}_prec{precision}"
+        save_path = f"{save_path}_sen{str(sensitivity).replace(".","-")}_res{resolution}"
 
     if file_type == "geotiff":
         with rasterio.open(f"{save_path}.tif", "w", **full_subevent_meta, compress="LZW") as file:
@@ -138,7 +152,8 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     for file in all_patches:
         file.close()
     for path in all_patch_paths:
-        os.remove(path)
+        if os.path.exists(path):
+            os.remove(path)
 
     print(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
@@ -149,8 +164,8 @@ def plot_losses(losses, config, config_name, modelling_folder, rank, logger):
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
     multi_scale = True if len(config["output_scales"]) > 1 else False
     loss_types = ["total_train_losses"] + [loss_type for loss_type in losses.keys() if "train" not in loss_type and "epoch" not in loss_type and "local" not in loss_type]
-    colours = ["red", "midnightblue", "deepskyblue", "royalblue", "cyan"][:len(loss_types)]
-
+    colours = ['#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#a65628','#f781bf','#ffff33','#999999','#000000'][:len(loss_types)]
+    
     for loss_type, colour in zip(loss_types, colours):
         local_loss_type = "_".join(loss_type.split("_")[:-1]) + "_local_losses"
         for loss_name, line in zip(*([loss_type, local_loss_type], ["-", "--"]) if multi_scale else ([local_loss_type], ["--"])):
@@ -183,11 +198,11 @@ if __name__ == "__main__":
     parser.add_argument('-a', '--scale', default="local", help="Define the scale for the visualisation.")
     parser.add_argument('-f', '--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'png'.")
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not label & comparison")
-    parser.add_argument('-b', '--test_border', default=0, help="Print a border around the test set images, with the given pixel size")
+    parser.add_argument('-b', '--border', default=5, help="Print a border around the patches, with the given pixel size")
 
     parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
-    parser.add_argument('--threshold', type=float, default=0.05, help="Specify a threshold for the flood proportion.")
-    parser.add_argument('--precision', type=int, default=1, help="Specify the precision for the classification evaluation.")
+    parser.add_argument('--sensitivity', type=float, default=0.05, help="Specify a sensitivity for the flood proportion.")
+    parser.add_argument('--resolution', type=int, default=1, help="Specify the resolution for the classification evaluation.")
 
     args = parser.parse_args()
 
@@ -201,4 +216,4 @@ if __name__ == "__main__":
 
     visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
                           device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                          pred_only=args.pred_only, test_border=int(args.test_border), classification=args.classification, threshold=args.threshold, precision=args.precision)
+                          pred_only=args.pred_only, border=int(args.border), classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
