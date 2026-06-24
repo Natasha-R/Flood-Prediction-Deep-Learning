@@ -14,6 +14,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
+    parser.add_argument('--mask_all_features', action="store_true", default=False, help="Consecutively mask all of the features at all of the scales.")
     parser.add_argument('--mask_local_features', type=str, default=None, help="Mask these local scale features.")
     parser.add_argument('--mask_context_features', type=str, default=None, help="Mask these context scale features.")
     parser.add_argument('--mask_basin_features', type=str, default=None, help="Mask these basin scale features.")
@@ -33,11 +34,11 @@ if __name__ == "__main__":
 
     parser.add_argument('-f', '--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'png'.")
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not the label or comparison.")
-    parser.add_argument('--test_border', default=0, help="Print a border around the test set images, with the given pixel width.")
+    parser.add_argument('--border', default=5, help="Print a border around the patches, with the given pixel width.")
 
     parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
-    parser.add_argument('--threshold', type=float, default=0.05, help="Specify a threshold for the flood proportion.")
-    parser.add_argument('--precision', type=int, default=1, help="Specify the precision for the classification evaluation.")
+    parser.add_argument('--sensitivity', type=float, default=0.05, help="Specify a sensitivity for the flood proportion.")
+    parser.add_argument('--resolution', type=int, default=1, help="Specify the resolution for the classification evaluation.")
 
     parser.add_argument('-s', '--subset', default=None, help="Specify a data subset.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent.")
@@ -55,19 +56,8 @@ if __name__ == "__main__":
     config["permute"] = args.permute
     num_epochs = args.epochs if args.epochs else config['number_epochs']
     args.gpu = int(args.gpu)
-
-    if args.mask_local_features or args.mask_context_features or args.mask_basin_features:
-        for scale, scale_mask_features in zip(["local", "context", "basin"], [args.mask_local_features, args.mask_context_features, args.mask_basin_features]):
-            if scale_mask_features: mask_features[scale] = scale_mask_features.replace(" ", "").split(",")
-        config["masked_features"] = utils.mask_to_string(mask_features)
-        new_config_name = config_name + "_" + utils.mask_to_string(mask_features)
-
-    if args.mask_box:
-        mask_patch = {"scale": args.scale, 
-                      "top_left":args.box_top_left.replace(" ", "").split(","),
-                      "bottom_right": args.box_bottom_right.replace(" ", "").split(",")}
-        new_config_name = config_name + "_" + utils.mask_to_string(mask_patch)
-
+    new_config_name = config_name
+    
     model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
 
     if args.grad_cam_method:
@@ -77,17 +67,39 @@ if __name__ == "__main__":
         seg_grad_cam(config=config, config_name=new_config_name, data_folder=args.data_folder, modelling_folder=args.modelling_folder, model=model, device=args.gpu, method=args.grad_cam_method,
                      patch=args.patch, target_map=args.feature_map_scale, target_pred=args.prediction_scale, box_top_left=args.box_top_left, box_bottom_right=args.box_bottom_right, class_of_interest=args.class_of_interest)
     
-    else:
-        if args.metrics:
-            loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
-                                                      mask_features=mask_features, mask_patch=mask_patch)
-            calculate_metrics(config, config_name + "_masked", model, loader, args.modelling_folder, epoch=num_epochs, 
-                              device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
-                              classification=args.classification, threshold=args.threshold, c_precision=args.precision)
-            
-        if args.visualise:
-            visualise_predictions(config=config, config_name=new_config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
-                                  device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                                  pred_only=args.pred_only, test_border=int(args.test_border), mask_features=mask_features, mask_patch=mask_patch,
-                                  classification=args.classification, threshold=args.threshold, precision=args.precision)
+
+    if args.mask_box:
+        mask_patch = {"scale": args.scale, 
+                    "top_left":args.box_top_left.replace(" ", "").split(","),
+                    "bottom_right": args.box_bottom_right.replace(" ", "").split(",")}
+        new_config_name = config_name + "_" + utils.mask_to_string(mask_patch)
+
+    if args.mask_all_features:
+        for scale in config["scales"]:
+            for feature in config["features"]:
+                mask_features = {scale: [feature]}
+                config["masked_features"] = utils.mask_to_string(mask_features)
+                loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
+                                                          mask_features=mask_features, mask_patch=mask_patch)
+                calculate_metrics(config, config_name + "_masked", model, loader, args.modelling_folder, epoch=num_epochs, 
+                                device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
+                                classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
+
+    elif args.mask_local_features or args.mask_context_features or args.mask_basin_features:
+        for scale, scale_mask_features in zip(["local", "context", "basin"], [args.mask_local_features, args.mask_context_features, args.mask_basin_features]):
+            if scale_mask_features: mask_features[scale] = scale_mask_features.replace(" ", "").split(",")
+        config["masked_features"] = utils.mask_to_string(mask_features)
+        new_config_name = config_name + "_" + utils.mask_to_string(mask_features)
+                    
+    if args.metrics:
+        loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
+                                                mask_features=mask_features, mask_patch=mask_patch)
+        calculate_metrics(config, config_name + "_masked", model, loader, args.modelling_folder, epoch=num_epochs, 
+                        device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
+                        classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
         
+    if args.visualise:
+        visualise_predictions(config=config, config_name=new_config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
+                            device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
+                            pred_only=args.pred_only, border=int(args.border), mask_features=mask_features, mask_patch=mask_patch,
+                            classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)

@@ -11,7 +11,7 @@ from collections import defaultdict
 from modelling.utils import convert_to_classification
 
 def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, device, subset=None, subevent=None, event=None, patch=None,
-                      classification=False, threshold=None, c_precision=None):
+                      classification=False, sensitivity=None, resolution=None):
 
     model.eval()
     with torch.no_grad():
@@ -23,8 +23,8 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             loss_function = "dice"
         if classification:
             binary_prediction = True
-        config["threshold"] = threshold
-        config["precision"] = c_precision
+        config["sensitivity"] = sensitivity
+        config["resolution"] = resolution
         config["classification_evaluation"] = classification
 
         # define the metrics functions for both the binary and multi-class cases
@@ -97,8 +97,8 @@ if __name__ == "__main__":
     parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
     parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
-    parser.add_argument('--threshold', type=str, default="0.05", help="Specify a threshold for the flood proportion.")
-    parser.add_argument('--precision', type=str, default="1", help="Specify the precision for the classification evaluation.")
+    parser.add_argument('--sensitivity', type=str, default="0.05", help="Specify a sensitivity (threshold) for the flood proportion.")
+    parser.add_argument('--resolution', type=str, default="1", help="Specify the resolution for the classification evaluation.")
 
     parser.add_argument('-s', '--subset', default=None, help="Specify a data subset to calculate metrics on.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
@@ -117,11 +117,11 @@ if __name__ == "__main__":
     model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
     loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)
     
-    args.threshold = [float(value) for value in args.threshold.replace(" ", "").split(",")]
-    args.precision = [int(value) for value in args.precision.replace(" ", "").split(",")]
+    args.sensitivity = [float(value) for value in args.sensitivity.replace(" ", "").split(",")]
+    args.resolution = [int(value) for value in args.resolution.replace(" ", "").split(",")]
 
-    for threshold in args.threshold:
-        for c_precision in args.precision:
+    for sensitivity in args.sensitivity:
+        for resolution in args.resolution:
             calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
                             device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch,
-                            classification=args.classification, threshold=threshold, c_precision=c_precision)
+                            classification=args.classification, sensitivity=sensitivity, resolution=resolution)
