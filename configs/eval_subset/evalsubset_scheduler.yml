@@ -1,0 +1,21 @@
+architecture: "BranchedLocalUNet"
+
+features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+
+scales: ["local", "context", "basin"]
+local_weight: 1
+context_weight: 1
+basin_weight: 1
+
+class_weights: [0, 0.550, 1.450]
+use_scheduler: True
+number_epochs: 100
+learning_rate: 0.0001
+dropout: 0.1
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 10
+
+data_subset_file: "only_patches_data_subset"
