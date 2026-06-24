@@ -6,8 +6,8 @@ import math
 
 ######## BasicUNet -- https://github.com/jaxony/unet-pytorch
 
-def conv3x3(in_channels, out_channels, stride=1, padding=1, bias=True, groups=1):    
-    return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=padding, bias=bias, groups=groups)
+def conv3x3(in_channels, out_channels, stride=1, bias=True, groups=1, kernel_size=3):    
+    return nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2, bias=bias, groups=groups)
 
 def upconv2x2(in_channels, out_channels, mode='transpose'):
     if mode == 'transpose': return nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
@@ -17,14 +17,14 @@ def conv1x1(in_channels, out_channels, groups=1):
     return nn.Conv2d(in_channels, out_channels, kernel_size=1, groups=groups, stride=1)
 
 class DownConv(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout=0, pooling=True):
+    def __init__(self, in_channels, out_channels, dropout=0, pooling=True, kernel_size=3):
         super(DownConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.dropout_rate = dropout
         self.pooling = pooling
-        self.conv1 = conv3x3(self.in_channels, self.out_channels)
-        self.conv2 = conv3x3(self.out_channels, self.out_channels)
+        self.conv1 = conv3x3(self.in_channels, self.out_channels, kernel_size=kernel_size)
+        self.conv2 = conv3x3(self.out_channels, self.out_channels, kernel_size=kernel_size)
         if self.dropout_rate > 0:
             self.dropout = nn.Dropout2d(self.dropout_rate)
         if self.pooling:
@@ -40,15 +40,15 @@ class DownConv(nn.Module):
         return x, before_pool
     
 class UpConv(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout=0, num_scales=1, up_mode="transpose"):
+    def __init__(self, in_channels, out_channels, dropout=0, num_scales=1, up_mode="transpose", kernel_size=3):
         super(UpConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.up_mode = up_mode
         self.dropout_rate = dropout
         self.upconv = upconv2x2(self.in_channels, self.out_channels, mode=self.up_mode)
-        self.conv1 = conv3x3((num_scales+1)*self.out_channels, self.out_channels)
-        self.conv2 = conv3x3(self.out_channels, self.out_channels)
+        self.conv1 = conv3x3((num_scales+1)*self.out_channels, self.out_channels, kernel_size=kernel_size)
+        self.conv2 = conv3x3(self.out_channels, self.out_channels, kernel_size=kernel_size)
         if self.dropout_rate > 0:
             self.dropout = nn.Dropout2d(self.dropout_rate)
     def forward(self, from_down, from_up):
@@ -114,6 +114,7 @@ class BasicUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
+        self.kernel_size = config.get("kernel_size", 3)
         self.in_channels = utils.find_num_channels(config)
         self.in_channels = self.in_channels * len(config["scales"])
         self.dropout = config["dropout"]
@@ -132,12 +133,12 @@ class BasicUNet(nn.Module):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
             pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.down_convs.append(down_conv)
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
             self.up_convs.append(up_conv)
         self.local_final = conv1x1(outs, self.num_classes)
         if "context" in self.scales:
@@ -176,6 +177,7 @@ class ChainedUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
+        self.kernel_size = config.get("kernel_size", 3)
         self.in_channels = utils.find_num_channels(config)
         self.dropout = config["dropout"]
         self.start_filts = start_filts
@@ -194,12 +196,12 @@ class ChainedUNet(nn.Module):
                 ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_down_convs.append(down_conv)
             for i in range(depth-1):
                 ins = outs
                 outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_up_convs.append(up_conv)      
             self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
             self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
@@ -215,12 +217,12 @@ class ChainedUNet(nn.Module):
                     ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_down_convs.append(down_conv)
             for i in range(depth-1):
                 ins = outs
                 outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_up_convs.append(up_conv)
             self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
@@ -232,12 +234,12 @@ class ChainedUNet(nn.Module):
             ins = self.in_channels + self.num_classes if i == 0 else outs
             outs = self.start_filts*(2**i)
             pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_down_convs.append(down_conv)
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_up_convs.append(up_conv)
         self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
@@ -314,6 +316,7 @@ class BranchedUNet(nn.Module):
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
         self.use_attention = config.get("use_attention", True)
+        self.kernel_size = config.get("kernel_size", 3)
         self.dropout = config["dropout"]
         self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
@@ -334,12 +337,12 @@ class BranchedUNet(nn.Module):
                 ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_down_convs.append(down_conv)
             for i in range(depth-1):
                 ins = outs
                 outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_up_convs.append(up_conv)      
             self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
             self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
@@ -352,12 +355,12 @@ class BranchedUNet(nn.Module):
                 ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_down_convs.append(down_conv)
             for i in range(depth-1):
                 ins = outs
                 outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_up_convs.append(up_conv)
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
             self.context_up_convs = nn.ModuleList(self.context_up_convs)
@@ -371,12 +374,12 @@ class BranchedUNet(nn.Module):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
             pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_down_convs.append(down_conv)
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout)
+            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_up_convs.append(up_conv)
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.local_up_convs = nn.ModuleList(self.local_up_convs)
@@ -464,10 +467,8 @@ class BranchedLocalUNet(nn.Module):
 
         self.up_mode = up_mode
         self.num_classes = config["num_classes"]
-        self.local_weight = config["local_weight"]
-        self.context_weight = config["context_weight"]
-        self.basin_weight = config["basin_weight"]
         self.use_attention = config.get("use_attention", True)
+        self.kernel_size = config.get("kernel_size", 3)
         self.dropout = config["dropout"]
         self.in_channels = utils.find_num_channels(config)
         self.start_filts = start_filts
@@ -482,22 +483,24 @@ class BranchedLocalUNet(nn.Module):
         self.scales = config["scales"]
 
         if "basin" in self.scales:
+            self.basin_weight = config["basin_weight"]
             self.basin_down_convs = []
             for i in range(depth):
                 ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_down_convs.append(down_conv)
             self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
 
         if "context" in self.scales:
+            self.context_weight = config["context_weight"]
             self.context_down_convs = []
             for i in range(depth):
                 ins = self.in_channels if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_down_convs.append(down_conv)
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
             if "basin" in self.scales:
@@ -505,16 +508,17 @@ class BranchedLocalUNet(nn.Module):
                 
         self.local_down_convs = []
         self.up_convs = []
+        self.local_weight = config["local_weight"]
         for i in range(depth):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
             pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout)
+            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_down_convs.append(down_conv)
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, num_scales=len(self.scales), dropout=self.dropout)
+            up_conv = UpConv(ins, outs, up_mode=up_mode, num_scales=len(self.scales), dropout=self.dropout, kernel_size=self.kernel_size)
             self.up_convs.append(up_conv)
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.up_convs = nn.ModuleList(self.up_convs)
