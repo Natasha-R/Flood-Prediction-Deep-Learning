@@ -35,6 +35,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
         logger = utils.get_logger()
         config, config_name = utils.load_config(config_path, logger)
         model = utils.load_model(config, rank, ddp, logger, pretrained_path)
+        output_scales = ["local"] if config.get("only_pred_local", True) else config["scales"]
         subsets = list(pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")["subset"].unique())
         subsets = [subset for subset in subsets if "test" not in subset]
         data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset, training=True) for subset in subsets}
@@ -71,9 +72,9 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
 
                 loss = 0.0
                 local_losses = 0.0
-                for scale in config["output_scales"]:
+                for scale in output_scales:
                     indiv_loss = loss_function(model_output[f"{scale}_pred"].squeeze(), data[f"{scale}_label"])
-                    loss = loss + config[f"{scale}_weight"] * indiv_loss
+                    loss = loss + config.get(f"{scale}_loss_weight", 1) * indiv_loss
                     if scale == "local":
                         local_losses += indiv_loss.item()
                 loss.backward()
@@ -93,9 +94,9 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
                             model_output = model(data)
                             loss = 0.0
                             local_losses = 0.0
-                            for scale in config["output_scales"]:
+                            for scale in output_scales:
                                 indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
-                                loss = loss + config[f"{scale}_weight"] * indiv_loss
+                                loss = loss + config[f"{scale}_loss_weight"] * indiv_loss
                                 if scale == "local":
                                     local_losses += indiv_loss.item()
                             losses[f"epoch_{validation_loader}_losses"].append(loss.item())
@@ -115,6 +116,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
                 model_save_path = f"{modelling_folder}/models/{config_name}_{epoch}.pth"
                 torch.save(model.module.state_dict() if ddp else model.state_dict(), model_save_path)
                 logger.info(f"Saved the model to: {model_save_path}")
+            
+            if (config["compute_metrics_on_epoch"] != 0) and ((epoch % config["compute_metrics_on_epoch"]) == 0) and ((rank==0) or (ddp==False)):
 
                 if compute_losses:
                     plot_losses(losses, config, config_name, modelling_folder, rank, logger)

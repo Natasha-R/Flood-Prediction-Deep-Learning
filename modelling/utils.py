@@ -51,21 +51,11 @@ def load_config(config_path, logger=None):
 
     config["num_classes"] = 1 if config.get("loss_function", "cross entropy").lower()=="dice" else 3
 
-    # input and outut scales list
-    if config["architecture"].lower() == "branchedlocalunet":
-        config["output_scales"] = ["local"]
-    else:
-        config["output_scales"] = config["scales"]
+    config["scales"] = [param.split("_")[0] for param in config.keys() if "features" in param]
 
-    if "indices" in config["features"]:
-        config["features"] = [feature for feature in config["features"] if feature != "indices"] + ["indices"]
-
-    class_features = ["soil_class", "land_cover"]
-    config["class_features_exist"] = any(feature in class_features for feature in config["features"])
-    config["num_class_features"] = sum([feature in class_features for feature in config["features"]])
-
-    if config["architecture"].lower() != "basicunet" and len(config["scales"]) == 1:
-        raise ValueError(f"For multi-scale architectures ({config['architecture']}), multiple scales of data must be used!")
+    for scale in config["scales"]:
+        if "indices" in config[f"{scale}_features"]:
+            config[f"{scale}_features"] = [feature for feature in config[f"{scale}_features"] if feature != "indices"] + ["indices"]
 
     return config, config_name
 
@@ -74,12 +64,8 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
     # load the model architecture
     if config["architecture"].lower()=="basicunet":
         org_model = architectures.BasicUNet(config)
-    elif config["architecture"].lower()=="chainedunet":
-        org_model = architectures.ChainedUNet(config)
     elif config["architecture"].lower()=="branchedunet":
         org_model = architectures.BranchedUNet(config)
-    elif config["architecture"].lower()=="branchedlocalunet":
-        org_model = architectures.BranchedLocalUNet(config)
     else:
         raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 
@@ -88,6 +74,19 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
         org_model.load_state_dict(torch.load(pretrained_path, weights_only=False, map_location=torch.device(rank)))
         if logger:
             logger.info(f"Pretrained model weights loaded from {pretrained_path}")
+
+    # freeze the specified encoders
+    if config["architecture"].lower()=="branchedunet":
+        freeze_encoders = config.get("freeze_encoder", [])
+        if "basin" in freeze_encoders:
+            for param in org_model.basin_down_convs.parameters():
+                param.requires_grad = False
+        if "context" in freeze_encoders:
+            for param in org_model.context_down_convs.parameters():
+                param.requires_grad = False
+        if "local" in freeze_encoders:
+            for param in org_model.local_down_convs.parameters():
+                param.requires_grad = False
 
     # put the model onto the GPU(s)
     org_model = org_model.to(rank)
@@ -104,20 +103,42 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
     
     return model
 
-def find_num_channels(config):
-    channels_in_features = {"dem":1, "permanent_water":1, "soil_bulk_density":1, "flow_accumulation":1,
-                                "soil_moisture_one_week":2, "soil_moisture_one_day":2, "soil_class":3, "land_cover":3,
-                                "precipitation":16, "sentinel1":3, "sentinel2":12, "flow_direction":2, "indices":5, "summary_precipitation":3,
-                                "soil_vol_water":2, "slope":1, "hand":1}
-    in_channels = sum([channels_in_features[feature] for feature in config["features"]])
-    return in_channels
-
 def mask_to_string(mask_desc):
     mask_desc = str(mask_desc)
     for punctuation in ["'", "{", "}", " ", "_", ":"]:
         mask_desc = mask_desc.replace(punctuation, "")
     mask_desc = mask_desc.replace(",", "_")
     return mask_desc
+
+####### FEATURE INFORMATION
+
+def get_indices_per_feature():
+    return {feature_name: list(range(index)) for feature_name, index in 
+            zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
+                 "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
+                 "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
+                 [1, 1, 2, 2, 12, 16, 
+                  3, 1, 1, 2, 1, 1, 
+                  5, 3, 2, 1, 1])}
+
+def find_num_channels(config, scale, embeddings=False):
+    channels_in_features = {feature: len(indices) for feature, indices in get_indices_per_feature().items()}
+    in_channels = sum([channels_in_features[feature] for feature in config[f"{scale}_features"]])
+    if embeddings:
+        in_channels += 2*(len([feature for feature in config[f"{scale}_features"] if feature in get_class_features()]))
+    return in_channels
+
+def get_class_features():
+    return ["soil_class", "land_cover"]
+
+def get_class_feature_classes():
+    return {"soil_class":31, "land_cover":12}
+
+def get_derived_features():
+    return ["indices"]
+
+def get_non_transformed_features():
+    return ["permanent_water", "soil_class", "land_cover", "indices"]
 
 def convert_to_classification(pred, label, config):
 

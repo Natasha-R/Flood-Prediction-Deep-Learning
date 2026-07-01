@@ -11,6 +11,7 @@ from collections import defaultdict
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import random
+from modelling import utils
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
@@ -24,12 +25,12 @@ def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, eve
      dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_patch, training)
 
      if ddp: 
-               loader = torch.utils.data.DataLoader(
-               dataset=dataset,
-               batch_size=config["batch_size"],
-               num_workers=config["number_workers"],
-               shuffle=False,
-               sampler=DistributedSampler(dataset=dataset, shuffle=True))
+          loader = torch.utils.data.DataLoader(
+          dataset=dataset,
+          batch_size=config["batch_size"],
+          num_workers=config["number_workers"],
+          shuffle=False,
+          sampler=DistributedSampler(dataset=dataset, shuffle=True))
      else:
           generator = torch.Generator()
           generator.manual_seed(47)
@@ -51,11 +52,13 @@ class FloodDataset(torch.utils.data.Dataset):
           
           self.config = config
           self.data_folder = data_folder
+          self.class_features = utils.get_class_features()
+          self.derived_features = utils.get_derived_features()
+
           self.scales = self.config["scales"]
-          self.class_features = ["soil_class", "land_cover"]
-          self.class_features_exist = config["class_features_exist"]
-          self.indices_exist = "indices" in self.config["features"]
-          self.features = [feature for feature in self.config["features"] if feature != "indices"]
+          self.features = {scale: [feature for feature in self.config[f"{scale}_features"]] for scale in self.scales}
+          self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
+          self.derived_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.derived_features]) for scale in self.scales}
 
           # subset the data patches based on a particular train/validation split, subevent, or event
           data_subset = pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")
@@ -89,9 +92,12 @@ class FloodDataset(torch.utils.data.Dataset):
 
      def get_data(self, index, scale, class_feature):
 
-          data = [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.features if ((feature in self.class_features) == class_feature)]
-          if self.indices_exist:
-               return data + [self.calculate_indices(index, scale)]
+          # imported features
+          data = [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.features[scale] if\
+                  (((feature in self.class_features) == class_feature) and (feature not in self.derived_features))]
+          # derived features
+          if self.derived_exists[scale]:
+               data = data + [self.calculate_indices(index, scale)]
           return data
      
      def get_label(self, index, scale):
@@ -104,7 +110,7 @@ class FloodDataset(torch.utils.data.Dataset):
           for scale in self.scales:
                data[f"{scale}_features"] = self.get_data(index, scale, class_feature=False)
                data[f"{scale}_label"] = self.get_label(index, scale)
-               if self.class_features_exist:
+               if self.class_exists[scale]:
                     data[f"{scale}_classes"] = self.get_data(index, scale, class_feature=True)
 
           data = self.transform(data)
@@ -116,8 +122,9 @@ class ToTensor(object):
      def __init__(self, config):
           self.config = config
           self.scales = self.config["scales"]
-          self.class_features_exist = config["class_features_exist"]
-
+          self.class_features = utils.get_class_features()
+          self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
+          
      def concat_data(self, features):
           return torch.concat([torch.from_numpy(np.expand_dims(feature, 0).astype(np.float32)) if feature.ndim == 2 else torch.from_numpy(feature.astype(np.float32)).permute(2, 0, 1) for feature in features], dim=0)
      
@@ -125,23 +132,23 @@ class ToTensor(object):
 
           for scale in self.scales:
                
+               # features
                data[f"{scale}_features"] = self.concat_data(data[f"{scale}_features"]) # CxHxW
+               if self.class_exists[scale]:
+                    data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])
 
+               # label
                data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
-               # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area
-               # after: 0: no data, 1: aoi, 2: flood
+               # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area # after: 0: no data, 1: aoi, 2: flood
                if self.config.get("flood_trace_label", True):
-                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # combine flood trace and flooded
+                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # convert flood trace and flooded to "flood"
                else:
-                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to other
+                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to "aoi" (non-flood)
                     data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2
-               
+               # if using dice loss, convert the label to binary
                if self.config.get("loss_function", "cross entropy").lower()=="dice":
                     data[f"{scale}_label"][data[f"{scale}_label"]==1] = 0
                     data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1
-
-               if self.class_features_exist:
-                    data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])
 
           return data
      
@@ -152,51 +159,45 @@ class HorizontalFlip(object):
           self.subset = subset
 
      def __call__(self, data):
-
+          # randomly flip the patches during training
           if self.training and self.subset=="train" and random.choice([True, False]):
                for key in data:
                     data[key] = torch.flip(data[key], dims=[-1])
-               return data
-          
-          else:
-               return data
+          return data
 
 class Normalize(object):
      def __init__(self, config, data_folder):
 
           self.config = config
           self.scales = self.config["scales"]
-          self.features = [feature for feature in config["features"] if feature not in ["soil_class", "land_cover"]]
+          self.class_features = utils.get_class_features()
+          self.non_transformed_features = utils.get_non_transformed_features()
+
+          self.non_class_features = {scale: [feature for feature in self.config[f"{scale}_features"] if feature not in self.class_features] for scale in self.scales}
+          self.features_to_transform = {scale: [feature for feature in self.non_class_features[scale] if feature not in self.non_transformed_features] for scale in self.scales}
 
           # import the metadata with the predefined shift and scale factors for each feature
           with open(f"{data_folder}/metadata/zscore.json") as file:
                self.zscore = json.load(file)
 
-          # define the number of bands contained within each feature
-          self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
-                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
-                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
-                                       "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
-                                      [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3, 2, 1, 1])}
-          self.non_transformed_features = ["permanent_water", "soil_class", "land_cover", "indices"]
-
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           self.zscore_values = {}
-          self.features_to_transform = [feature for feature in self.features if not feature in self.non_transformed_features]
-          for feature in self.features_to_transform:
-               self.zscore_values[feature] = {"shift": torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]]),
-                                              "scale": torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])}
-               
-          # find the location (index range) within the tensor for all of the classes
           self.feature_channels = {}
-          open_slice = 0
-          
-          for feature_name in self.features:
-               number_channels = len(self.feature_indices[feature_name])
-               self.feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
-               open_slice += number_channels
+          self.feature_indices = utils.get_indices_per_feature()
+          for scale in self.scales:
+               self.zscore_values[scale] = {}
+               for feature in self.features_to_transform[scale]:
+                    self.zscore_values[scale][feature] = {"shift": torch.tensor([self.zscore[feature][str(band)]["shift"] for band in self.feature_indices[feature]]),
+                                                          "scale": torch.tensor([self.zscore[feature][str(band)]["scale"] for band in self.feature_indices[feature]])}
+               # find the location (index range) within the tensor for all of the classes
+               open_slice = 0
+               self.feature_channels[scale] = {}
+               for feature_name in self.non_class_features[scale]:
+                    number_channels = len(self.feature_indices[feature_name])
+                    self.feature_channels[scale][feature_name] = slice(open_slice, open_slice + number_channels)
+                    open_slice += number_channels
                
-     def apply_normalization(self, feature_name, feature):
+     def apply_normalization(self, scale, feature_name, feature):
 
           # these features do not need to be scaled
           if feature_name in self.non_transformed_features:
@@ -212,15 +213,15 @@ class Normalize(object):
           elif feature_name in ["precipitation", "summary_precipitation", "slope", "hand"]:
                feature = torch.log(feature+1)
 
-          return torch.clamp((feature - self.zscore_values[feature_name]["shift"][:, None, None]) / self.zscore_values[feature_name]["scale"][:, None, None], min=-3, max=3)
+          return torch.clamp((feature - self.zscore_values[scale][feature_name]["shift"][:, None, None]) / self.zscore_values[scale][feature_name]["scale"][:, None, None], min=-3, max=3)
           
      def __call__(self, data):
           
           # normalize the features
-          for feature_name in self.features:
-               for scale in self.scales:
-                    channels = self.feature_channels[feature_name]
-                    data[f"{scale}_features"][channels] = self.apply_normalization(feature_name, data[f"{scale}_features"][channels])
+          for scale in self.scales:
+               for feature_name in self.non_class_features[scale]:
+                    channels = self.feature_channels[scale][feature_name]
+                    data[f"{scale}_features"][channels] = self.apply_normalization(scale, feature_name, data[f"{scale}_features"][channels])
 
           return data
 
@@ -233,22 +234,23 @@ class MaskFeatures(object):
 
           self.config = config
           self.scales = self.config["scales"]
-          self.features = [feature for feature in config["features"] if feature not in ["soil_class", "land_cover"]]
-          self.class_features = [feature for feature in config["features"] if feature in ["soil_class", "land_cover"]]
-          self.feature_indices = {feature_name: list(range(index)) for feature_name, index in 
-                                  zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
-                                       "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
-                                       "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
-                                       [1, 1, 2, 2, 12, 16, 3, 1, 1, 2, 1, 1, 5, 3, 2, 1, 1])}
+          self.class_features = utils.get_class_features()
+
+          self.non_class_features = {scale: [feature for feature in self.config[f"{scale}_features"] if feature not in self.class_features] for scale in self.scales}
+          self.class_features = {scale: [feature for feature in self.config[f"{scale}_features"] if feature in self.class_features] for scale in self.scales}
+          self.feature_indices = utils.get_indices_per_feature()
           self.mask_features = mask_features
 
           self.feature_channels, self.class_feature_channels = {}, {}
-          for feature_group, feature_channels in zip([self.features, self.class_features], [self.feature_channels, self.class_feature_channels]):
-               open_slice = 0
-               for feature_name in feature_group:
-                    number_channels = len(self.feature_indices[feature_name])
-                    feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
-                    open_slice += number_channels
+          for scale in self.scales:
+               self.feature_channels[scale] = {}
+               self.class_feature_channels[scale] = {}
+               for feature_group, feature_channels in zip([self.non_class_features[scale], self.class_features[scale]], [self.feature_channels[scale], self.class_feature_channels[scale]]):
+                    open_slice = 0
+                    for feature_name in feature_group:
+                         number_channels = len(self.feature_indices[feature_name])
+                         feature_channels[feature_name] = slice(open_slice, open_slice + number_channels)
+                         open_slice += number_channels
 
      def __call__(self, data):
 
@@ -256,11 +258,11 @@ class MaskFeatures(object):
                for scale in self.mask_features:
                     for feature_name in self.mask_features[scale]:
 
-                         if feature_name in self.feature_channels:
-                              feature_channels = self.feature_channels
+                         if feature_name in self.feature_channels[scale]:
+                              feature_channels = self.feature_channels[scale]
                               key = "features"
                          else: # if feature name is a class feature
-                              feature_channels = self.class_feature_channels
+                              feature_channels = self.class_feature_channels[scale]
                               key = "classes"
 
                          channels = feature_channels[feature_name]
@@ -270,10 +272,8 @@ class MaskFeatures(object):
                                    data[f"{scale}_{key}"][channels][channel, :, :] = 0
                               else:
                                    data[f"{scale}_{key}"][channels][channel, :, :] = data[f"{scale}_{key}"][channels][channel, :, :].view(-1)[torch.randperm(256*256)].view(1, 256, 256) 
-               return data
-          
-          else:
-               return data
+
+          return data
           
 class MaskPatch(object):
      """
@@ -317,11 +317,7 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
      zscore = nested_defaultdict()
 
      # define the features to normalize
-     features = [(feature_name, band_index) for feature_name, feature_count in 
-                 zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "sentinel1", "flow_accumulation", "summary_precipitation",
-                      "soil_vol_water", "slope", "hand"], 
-                     [1, 1, 2, 2, 12, 3, 1, 3, 2, 1, 1]) 
-                 for band_index in range(feature_count)]
+     features = [(feature_name, index) for feature_name, indices in utils.get_indices_per_feature().items() for index in indices if feature_name != "precipitation"]
      features = features + [("precipitation", (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)), ("precipitation", 14), ("precipitation", 15)]
 
      for feature, band in tqdm(features, desc="Feature"):

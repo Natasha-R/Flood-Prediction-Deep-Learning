@@ -26,6 +26,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
         config["sensitivity"] = sensitivity
         config["resolution"] = resolution
         config["classification_evaluation"] = classification
+        output_scales = ["local"] if config["only_pred_local"] else config["scales"]
 
         # define the metrics functions for both the binary and multi-class cases
         if binary_prediction:
@@ -49,7 +50,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             for item in data.keys():
                 data[item] = data[item].to(device)
             model_output = model(data)
-            for scale in config["output_scales"]:
+            for scale in output_scales:
                 if loss_function == "dice":
                     model_output[f"{scale}_pred"] = (torch.sigmoid(model_output[f"{scale}_pred"].squeeze()) > 0.5)*1
                 else:
@@ -60,7 +61,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
                 predictions[scale].append(model_output[f"{scale}_pred"])
                 labels[scale].append(data[f"{scale}_label"])
 
-        for scale in config["output_scales"]:
+        for scale in output_scales:
             predictions[scale] = torch.concat(predictions[scale], dim=0)
             labels[scale] = torch.concat(labels[scale], dim=0)
 
@@ -70,7 +71,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
 
         # calculate metrics from the model predictions
         for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
-            for scale in config["output_scales"]:
+            for scale in output_scales:
                 for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
                     if binary_prediction and class_name=="no_flood":
                         metric = metrics_function(1-predictions[scale], 1-labels[scale])

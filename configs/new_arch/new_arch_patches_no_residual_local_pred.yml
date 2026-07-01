@@ -1,15 +1,14 @@
-architecture: "BranchedLocalUNet"
+architecture: "BranchedUNet"
 kernel_size: 5
+use_attention: True
+
+only_pred_local: True
+residuals_all_scales: False
 
 local_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
 context_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
-features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
 
-scales: ["local", "context"]
-local_weight: 1
-context_weight: 1
-
-class_weights: [0, 0.1, 1.9]
+class_weights: [0, 0.550, 1.450]
 use_scheduler: False
 number_epochs: 100
 learning_rate: 0.0001
@@ -19,5 +18,6 @@ batch_size: 32
 number_workers: 8
 
 save_model_on_epoch: 10
+compute_metrics_on_epoch: 10
 
-data_subset_file: "europe_pretrained"
+data_subset_file: "only_patches_no_flood_data_subset"

@@ -162,13 +162,12 @@ def plot_losses(losses, config, config_name, modelling_folder, rank, logger):
     Plot the train and validation losses from model training.
     """
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 6))
-    multi_scale = True if len(config["output_scales"]) > 1 else False
     loss_types = ["total_train_losses"] + [loss_type for loss_type in losses.keys() if "train" not in loss_type and "epoch" not in loss_type and "local" not in loss_type]
     colours = ['#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#a65628','#f781bf','#ffff33','#999999','#000000'][:len(loss_types)]
     
     for loss_type, colour in zip(loss_types, colours):
         local_loss_type = "_".join(loss_type.split("_")[:-1]) + "_local_losses"
-        for loss_name, line in zip(*([loss_type, local_loss_type], ["-", "--"]) if multi_scale else ([local_loss_type], ["--"])):
+        for loss_name, line in zip(*([loss_type, local_loss_type], ["-", "--"]) if not config["only_pred_local"] else ([local_loss_type], ["--"])):
             ax.plot(range(1, len(losses[loss_name])+1), losses[loss_name], line, c=colour, linewidth=2, label=" ".join(loss_name.split("_")[1:-1]).title() + " Loss")
 
     ax.set_title(f"Train and Validation Losses (GPU {rank})", fontsize=15)

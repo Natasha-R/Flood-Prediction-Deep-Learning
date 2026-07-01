@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import modelling.utils as utils
 import math
 
-######## BasicUNet -- https://github.com/jaxony/unet-pytorch
+######## UNet code based on: https://github.com/jaxony/unet-pytorch
 
 def conv3x3(in_channels, out_channels, stride=1, bias=True, groups=1, kernel_size=3):    
     return nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2, bias=bias, groups=groups)
@@ -60,10 +60,15 @@ class UpConv(nn.Module):
             x = self.dropout(x)
         return x
     
-def create_embeddings(config):
-    num_classes = {"soil_class":31, "land_cover":12}
-    class_features = ["soil_class", "land_cover"]
-    return nn.ModuleList([nn.Embedding(num_embeddings=num_classes[feature], embedding_dim=3) for feature in config["features"] if feature in class_features])
+def create_embeddings(config, scale):
+    if scale == "all":
+        class_features = [feature for scale_name in config["scales"] for feature in config[f"{scale_name}_features"] if feature in utils.get_class_feature_classes().keys()]
+    else:
+        class_features = [feature for feature in config[f"{scale}_features"] if feature in utils.get_class_feature_classes().keys()]
+    if class_features:
+        return len(class_features), nn.ModuleList([nn.Embedding(num_embeddings=utils.get_class_feature_classes()[feature], embedding_dim=3) for feature in class_features])
+    else:
+        return 0, None
 
 class ConvFusion(nn.Module):
     def __init__(self, fusion_channels):
@@ -113,22 +118,21 @@ class BasicUNet(nn.Module):
         super(BasicUNet, self).__init__()
 
         self.up_mode = up_mode
+        self.scales = config["scales"]
+        if config.get("exclude_scales", False):
+            self.scales = [scale for scale in self.scales if scale not in config["exclude_scales"]]
         self.num_classes = config["num_classes"]
         self.kernel_size = config.get("kernel_size", 3)
-        self.in_channels = utils.find_num_channels(config)
-        self.in_channels = self.in_channels * len(config["scales"])
+        self.only_pred_local = config.get("only_pred_local", True)
+        self.in_channels = sum([utils.find_num_channels(config, scale, embeddings=True) for scale in self.scales])
         self.dropout = config["dropout"]
         self.start_filts = start_filts
         self.depth = config.get("depth", 5)
+        
+        self.scales_with_class = {scale: sum(True for feature in config[f"{scale}_features"] if feature in utils.get_class_features()) for scale in self.scales}
+        self.num_class_feats, self.embedding = create_embeddings(config, "all")
         self.down_convs = []
         self.up_convs = []
-        self.feature_classes_exist = False
-        if config["class_features_exist"]:
-             self.feature_classes_exist = True
-             self.num_class_features = config["num_class_features"]
-             self.embeddings = create_embeddings(config)
-        self.scales = config["scales"]
-
         for i in range(depth):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
@@ -141,22 +145,28 @@ class BasicUNet(nn.Module):
             up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
             self.up_convs.append(up_conv)
         self.local_final = conv1x1(outs, self.num_classes)
-        if "context" in self.scales:
+        if ("context" in self.scales) and (not self.only_pred_local):
             self.context_final = conv1x1(outs, self.num_classes)
-        if "basin" in self.scales:
+        if ("basin" in self.scales) and (not self.only_pred_local):
             self.basin_final = conv1x1(outs, self.num_classes)
         self.down_convs = nn.ModuleList(self.down_convs)
         self.up_convs = nn.ModuleList(self.up_convs)
 
     def forward(self, data):
-        encoder_outs = []
         
-        if self.feature_classes_exist:
-            x = torch.concat([torch.concat([data[f"{scale}_features"]] + [self.embeddings[index](torch.clip(data[f"{scale}_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)],
-                                            dim=1) for scale in self.scales], dim=1)
+        if self.num_class_feats:
+            embedding_index = 0
+            embedded_data = []
+            for scale in self.scales_with_class:
+                if self.scales_with_class[scale]:
+                    for index in range(self.scales_with_class[scale]):
+                        embedded_data.append(self.embedding[embedding_index](torch.clip(data[f"{scale}_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2))
+                        embedding_index += 1
+            x = torch.concat([torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1), torch.concat(embedded_data, dim=1)], dim=1)
         else:
             x = torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1)
 
+        encoder_outs = []
         for i, module in enumerate(self.down_convs):
             x, before_pool = module(x)
             encoder_outs.append(before_pool)
@@ -165,213 +175,81 @@ class BasicUNet(nn.Module):
             x = module(before_pool, x)
 
         predictions = {"local_pred": self.local_final(x)}
-        if "context" in self.scales:
+        if ("context" in self.scales) and (not self.only_pred_local):
             predictions["context_pred"] = self.context_final(x)
-        if "basin" in self.scales:
+        if ("basin" in self.scales) and (not self.only_pred_local):
             predictions["basin_pred"] = self.basin_final(x)
         return predictions
     
-class ChainedUNet(nn.Module):
-    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
-        super(ChainedUNet, self).__init__()
-
-        self.up_mode = up_mode
-        self.num_classes = config["num_classes"]
-        self.kernel_size = config.get("kernel_size", 3)
-        self.in_channels = utils.find_num_channels(config)
-        self.dropout = config["dropout"]
-        self.start_filts = start_filts
-        self.depth = config.get("depth", 5)
-        self.feature_classes_exist = False
-        if config["class_features_exist"]:
-             self.feature_classes_exist = True
-             self.num_class_features = config["num_class_features"]
-             self.embeddings = create_embeddings(config)
-        self.scales = config["scales"]
-
-        if "basin" in self.scales:
-            self.basin_down_convs = []
-            self.basin_up_convs = []
-            for i in range(depth):
-                ins = self.in_channels if i == 0 else outs
-                outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.basin_down_convs.append(down_conv)
-            for i in range(depth-1):
-                ins = outs
-                outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.basin_up_convs.append(up_conv)      
-            self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
-            self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
-            self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
-
-        if "context" in self.scales:
-            self.context_down_convs = []
-            self.context_up_convs = []
-            for i in range(depth):
-                if "basin" in self.scales:
-                    ins = self.in_channels + self.num_classes if i == 0 else outs
-                else:
-                    ins = self.in_channels if i == 0 else outs
-                outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.context_down_convs.append(down_conv)
-            for i in range(depth-1):
-                ins = outs
-                outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.context_up_convs.append(up_conv)
-            self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
-            self.context_down_convs = nn.ModuleList(self.context_down_convs)
-            self.context_up_convs = nn.ModuleList(self.context_up_convs)
-
-        self.local_down_convs = []
-        self.local_up_convs = []
-        for i in range(depth):
-            ins = self.in_channels + self.num_classes if i == 0 else outs
-            outs = self.start_filts*(2**i)
-            pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-            self.local_down_convs.append(down_conv)
-        for i in range(depth-1):
-            ins = outs
-            outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
-            self.local_up_convs.append(up_conv)
-        self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
-        self.local_down_convs = nn.ModuleList(self.local_down_convs)
-        self.local_up_convs = nn.ModuleList(self.local_up_convs)
-
-    def forward(self, data):
-
-        if "basin" in self.scales:
-            basin_encoder_outs = []
-            if self.feature_classes_exist:
-                x = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-            else:
-                x = data[f"basin_features"]
-            for i, module in enumerate(self.basin_down_convs):
-                x, basin_before_pool = module(x)
-                basin_encoder_outs.append(basin_before_pool)
-            for i, module in enumerate(self.basin_up_convs):
-                basin_before_pool = basin_encoder_outs[-(i+2)]
-                x = module(basin_before_pool, x)
-            basin_pred = self.basin_final(x)
-
-        if "context" in self.scales:
-            context_encoder_outs = []
-            if not self.feature_classes_exist:
-                if "basin" in self.scales:
-                    x = torch.concat([F.softmax(basin_pred, dim=1), data[f"context_features"]], dim=1)
-                else:
-                    x = data[f"context_features"]
-            else:
-                if "basin" in self.scales:
-                    x = torch.concat([basin_pred, data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-
-                else:
-                    x = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-
-            for i, module in enumerate(self.context_down_convs):
-                x, context_before_pool = module(x)
-                context_encoder_outs.append(context_before_pool)
-            for i, module in enumerate(self.context_up_convs):
-                context_before_pool = context_encoder_outs[-(i+2)]
-                x = module(context_before_pool, x)
-            context_pred = self.context_final(x)
-
-        local_encoder_outs = []
-        if not self.feature_classes_exist:
-            if "context" in self.scales:
-                x = torch.concat([F.softmax(context_pred, dim=1), data[f"local_features"]], dim=1)
-            else:
-                x = torch.concat([F.softmax(basin_pred, dim=1), data[f"local_features"]], dim=1)
-        else:
-            if "context" in self.scales:
-                x = torch.concat([context_pred, data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-            else:
-                x = torch.concat([basin_pred, data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-        for i, module in enumerate(self.local_down_convs):
-            x, local_before_pool = module(x)
-            local_encoder_outs.append(local_before_pool)
-        for i, module in enumerate(self.local_up_convs):
-            local_before_pool = local_encoder_outs[-(i+2)]
-            x = module(local_before_pool, x)
-        local_pred = self.local_final(x)
-
-        predictions = {"local_pred": local_pred}
-        if "context" in self.scales:
-            predictions["context_pred"] = context_pred
-        if "basin" in self.scales:
-            predictions["basin_pred"] = basin_pred
-        return predictions
-    
 class BranchedUNet(nn.Module):
-    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
+    def __init__(self, config, depth=5, start_filts=64):
         super(BranchedUNet, self).__init__()
 
-        self.up_mode = up_mode
-        self.num_classes = config["num_classes"]
+        # configure the architecture
+        self.only_pred_local = config.get("only_pred_local", True)
+        self.residuals_all_scales = config.get("residuals_all_scales", True)
         self.use_attention = config.get("use_attention", True)
         self.kernel_size = config.get("kernel_size", 3)
         self.dropout = config["dropout"]
-        self.in_channels = utils.find_num_channels(config)
-        self.start_filts = start_filts
+        self.num_classes = config["num_classes"]
         self.depth = config.get("depth", 5)
-        bottleneck_channels = start_filts * (2 ** (depth - 1))
-
-        self.feature_classes_exist = False
-        if config["class_features_exist"]:
-             self.feature_classes_exist = True
-             self.num_class_features = config["num_class_features"]
-             self.embeddings = create_embeddings(config)
         self.scales = config["scales"]
-
+        self.in_channels = {scale: utils.find_num_channels(config, scale, embeddings=True) for scale in config["scales"]}
+        self.start_filts = start_filts
+        bottleneck_channels = start_filts * (2 ** (depth - 1))
+        
+        # set up basin encoder and decoder
         if "basin" in self.scales:
+            self.basin_num_class_feats, self.basin_embedding = create_embeddings(config, "basin")
             self.basin_down_convs = []
-            self.basin_up_convs = []
             for i in range(depth):
-                ins = self.in_channels if i == 0 else outs
+                ins = self.in_channels["basin"] if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
                 down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_down_convs.append(down_conv)
-            for i in range(depth-1):
-                ins = outs
-                outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.basin_up_convs.append(up_conv)      
+            self.basin_weight = config.get("basin_feat_weight", 1)
+            if not self.only_pred_local:
+                self.basin_up_convs = []
+                for i in range(depth-1):
+                    ins = outs
+                    outs = ins // 2
+                    up_conv = UpConv(ins, outs, dropout=self.dropout, kernel_size=self.kernel_size)
+                    self.basin_up_convs.append(up_conv)   
+                self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
+                self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
             self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
-            self.basin_up_convs = nn.ModuleList(self.basin_up_convs)
-            self.basin_final = conv1x1(outs, self.num_classes) #BclassesHW 
 
+        # set up context encoder and decoder
         if "context" in self.scales:
+            self.context_num_class_feats, self.context_embedding = create_embeddings(config, "context")
             self.context_down_convs = []
-            self.context_up_convs = []
             for i in range(depth):
-                ins = self.in_channels if i == 0 else outs
+                ins = self.in_channels["context"] if i == 0 else outs
                 outs = self.start_filts*(2**i)
                 pooling = True if i < depth-1 else False
                 down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_down_convs.append(down_conv)
-            for i in range(depth-1):
-                ins = outs
-                outs = ins // 2
-                up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.context_up_convs.append(up_conv)
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
-            self.context_up_convs = nn.ModuleList(self.context_up_convs)
-            self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
+            self.context_weight = config.get("context_feat_weight", 1)
+            if not self.only_pred_local:
+                self.context_up_convs = []
+                for i in range(depth-1):
+                    ins = outs
+                    outs = ins // 2
+                    up_conv = UpConv(ins, outs, num_scales=2 if ("basin" in self.scales) and (self.residuals_all_scales) else 1, dropout=self.dropout, kernel_size=self.kernel_size)
+                    self.context_up_convs.append(up_conv)
+                self.context_up_convs = nn.ModuleList(self.context_up_convs)
+                self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
             if "basin" in self.scales:
                 self.context_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
                 
         self.local_down_convs = []
         self.local_up_convs = []
+        self.local_num_class_feats, self.local_embedding = create_embeddings(config, "local")
+        self.local_weight = config.get("local_feat_weight", 1)
         for i in range(depth):
-            ins = self.in_channels if i == 0 else outs
+            ins = self.in_channels["local"] if i == 0 else outs
             outs = self.start_filts*(2**i)
             pooling = True if i < depth-1 else False
             down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
@@ -379,7 +257,7 @@ class BranchedUNet(nn.Module):
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
+            up_conv = UpConv(ins, outs, num_scales=len(self.scales) if self.residuals_all_scales else 1, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_up_convs.append(up_conv)
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.local_up_convs = nn.ModuleList(self.local_up_convs)
@@ -392,147 +270,8 @@ class BranchedUNet(nn.Module):
 
         if "basin" in self.scales:
             basin_encoder_outs = []
-            if self.feature_classes_exist:
-                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-            else:
-                basin = data[f"basin_features"]
-            for i, module in enumerate(self.basin_down_convs):
-                basin, basin_before_pool = module(basin)
-                basin_encoder_outs.append(basin_before_pool)
-            final_features["basin"] = basin
-
-        if "context" in self.scales:
-            context_encoder_outs = []
-            if self.feature_classes_exist:
-                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-            else:
-                context = data[f"context_features"]
-            for i, module in enumerate(self.context_down_convs):
-                context, context_before_pool = module(context)
-                context_encoder_outs.append(context_before_pool)
-            final_features["context"] = context
-
-        local_encoder_outs = []
-        if self.feature_classes_exist:
-            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
-        else:
-            local = data[f"local_features"]
-        for i, module in enumerate(self.local_down_convs):
-            local, local_before_pool = module(local)
-            local_encoder_outs.append(local_before_pool)
-        final_features["local"] = local
-
-        if "basin" in self.scales:
-            if "context" in self.scales:
-                context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
-                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
-            else:
-                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
-        else:
-            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
-
-        if "basin" in self.scales:
-            x = final_features["basin"]
-            for i, module in enumerate(self.basin_up_convs):
-                basin_before_pool = basin_encoder_outs[-(i+2)]
-                x = module(basin_before_pool, x)
-            basin_pred = self.basin_final(x)
-
-        if "context" in self.scales:
-            if "basin" in self.scales:
-                x = context_attended_basin
-            else:
-                x = final_features["context"]
-            for i, module in enumerate(self.context_up_convs):
-                context_before_pool = context_encoder_outs[-(i+2)]
-                x = module(context_before_pool, x)
-            context_pred = self.context_final(x)
-
-        x = local_attended_higher
-        for i, module in enumerate(self.local_up_convs):
-            local_before_pool = local_encoder_outs[-(i+2)]
-            x = module(local_before_pool, x)
-        local_pred = self.local_final(x)
-
-        predictions = {"local_pred": local_pred}
-        if "context" in self.scales:
-            predictions["context_pred"] = context_pred
-        if "basin" in self.scales:
-            predictions["basin_pred"] = basin_pred
-        return predictions
-    
-class BranchedLocalUNet(nn.Module):
-    def __init__(self, config, depth=5, start_filts=64, up_mode="transpose"):
-        super(BranchedLocalUNet, self).__init__()
-
-        self.up_mode = up_mode
-        self.num_classes = config["num_classes"]
-        self.use_attention = config.get("use_attention", True)
-        self.kernel_size = config.get("kernel_size", 3)
-        self.dropout = config["dropout"]
-        self.in_channels = utils.find_num_channels(config)
-        self.start_filts = start_filts
-        self.depth = config.get("depth", 5)
-        bottleneck_channels = start_filts * (2 ** (depth - 1))
-
-        self.feature_classes_exist = False
-        if config["class_features_exist"]:
-             self.feature_classes_exist = True
-             self.num_class_features = config["num_class_features"]
-             self.embeddings = create_embeddings(config)
-        self.scales = config["scales"]
-
-        if "basin" in self.scales:
-            self.basin_weight = config["basin_weight"]
-            self.basin_down_convs = []
-            for i in range(depth):
-                ins = self.in_channels if i == 0 else outs
-                outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.basin_down_convs.append(down_conv)
-            self.basin_down_convs = nn.ModuleList(self.basin_down_convs)
-
-        if "context" in self.scales:
-            self.context_weight = config["context_weight"]
-            self.context_down_convs = []
-            for i in range(depth):
-                ins = self.in_channels if i == 0 else outs
-                outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
-                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-                self.context_down_convs.append(down_conv)
-            self.context_down_convs = nn.ModuleList(self.context_down_convs)
-            if "basin" in self.scales:
-                self.context_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
-                
-        self.local_down_convs = []
-        self.up_convs = []
-        self.local_weight = config["local_weight"]
-        for i in range(depth):
-            ins = self.in_channels if i == 0 else outs
-            outs = self.start_filts*(2**i)
-            pooling = True if i < depth-1 else False
-            down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
-            self.local_down_convs.append(down_conv)
-        for i in range(depth-1):
-            ins = outs
-            outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, num_scales=len(self.scales), dropout=self.dropout, kernel_size=self.kernel_size)
-            self.up_convs.append(up_conv)
-        self.local_down_convs = nn.ModuleList(self.local_down_convs)
-        self.up_convs = nn.ModuleList(self.up_convs)
-        self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
-        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
-
-    def forward(self, data):
-
-        final_features = {}
-
-        if "basin" in self.scales:
-            basin_encoder_outs = []
-            if self.feature_classes_exist:
-                basin = torch.concat([data[f"basin_features"]] + [self.embeddings[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+            if self.basin_num_class_feats:
+                basin = torch.concat([data[f"basin_features"]] + [self.basin_embedding[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.basin_num_class_feats)], dim=1)
             else:
                 basin = data[f"basin_features"]
             basin = basin * self.basin_weight
@@ -543,8 +282,8 @@ class BranchedLocalUNet(nn.Module):
 
         if "context" in self.scales:
             context_encoder_outs = []
-            if self.feature_classes_exist:
-                context = torch.concat([data[f"context_features"]] + [self.embeddings[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+            if self.context_num_class_feats:
+                context = torch.concat([data[f"context_features"]] + [self.context_embedding[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.context_num_class_feats)], dim=1)
             else:
                 context = data[f"context_features"]
             context = context * self.context_weight
@@ -554,8 +293,8 @@ class BranchedLocalUNet(nn.Module):
             final_features["context"] = context
 
         local_encoder_outs = []
-        if self.feature_classes_exist:
-            local = torch.concat([data[f"local_features"]] + [self.embeddings[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.num_class_features)], dim=1)
+        if self.local_num_class_feats:
+             local = torch.concat([data[f"local_features"]] + [self.local_embedding[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.local_num_class_feats)], dim=1)
         else:
             local = data[f"local_features"]
         local = local * self.local_weight
@@ -573,18 +312,59 @@ class BranchedLocalUNet(nn.Module):
         else:
             local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
 
-        x = local_attended_higher
-        for i, module in enumerate(self.up_convs):
-            up_features = []
+        if not self.only_pred_local:
             if "basin" in self.scales:
-                basin_before_pool = basin_encoder_outs[-(i+2)]
-                up_features.append(basin_before_pool)
-            if "context" in self.scales:
-                context_before_pool = context_encoder_outs[-(i+2)]
-                up_features.append(context_before_pool)
-            local_before_pool = local_encoder_outs[-(i+2)]
-            up_features.append(local_before_pool)
-            before_pool = torch.cat(up_features, dim=1)
-            x = module(before_pool, x)
+                x = final_features["basin"]
+                for i, module in enumerate(self.basin_up_convs):
+                    basin_before_pool = basin_encoder_outs[-(i+2)]
+                    x = module(basin_before_pool, x)
+                basin_pred = self.basin_final(x)
 
-        return {"local_pred": self.local_final(x)}
+            if "context" in self.scales:
+                if (self.residuals_all_scales) and ("basin" in self.scales):
+                    x = context_attended_basin
+                    for i, module in enumerate(self.context_up_convs):
+                        up_features = []
+                        basin_before_pool = basin_encoder_outs[-(i+2)]
+                        up_features.append(basin_before_pool)
+                        context_before_pool = context_encoder_outs[-(i+2)]
+                        up_features.append(context_before_pool)
+                        before_pool = torch.cat(up_features, dim=1)
+                        x = module(before_pool, x)
+                    context_pred = self.context_final(x)
+                else:
+                    x = context_attended_basin if "basin" in self.scales else final_features["context"]
+                    for i, module in enumerate(self.context_up_convs):
+                        context_before_pool = context_encoder_outs[-(i+2)]
+                        x = module(context_before_pool, x)
+                    context_pred = self.context_final(x)
+
+        if self.residuals_all_scales:
+            x = local_attended_higher
+            for i, module in enumerate(self.local_up_convs):
+                up_features = []
+                if "basin" in self.scales:
+                    basin_before_pool = basin_encoder_outs[-(i+2)]
+                    up_features.append(basin_before_pool)
+                if "context" in self.scales:
+                    context_before_pool = context_encoder_outs[-(i+2)]
+                    up_features.append(context_before_pool)
+                local_before_pool = local_encoder_outs[-(i+2)]
+                up_features.append(local_before_pool)
+                before_pool = torch.cat(up_features, dim=1)
+                x = module(before_pool, x)
+            local_pred = self.local_final(x)
+
+        else:
+            x = local_attended_higher
+            for i, module in enumerate(self.local_up_convs):
+                local_before_pool = local_encoder_outs[-(i+2)]
+                x = module(local_before_pool, x)
+            local_pred = self.local_final(x)
+                
+        predictions = {"local_pred": local_pred}
+        if ("context" in self.scales) and (not self.only_pred_local):
+            predictions["context_pred"] = context_pred
+        if ("basin" in self.scales) and (not self.only_pred_local):
+            predictions["basin_pred"] = basin_pred
+        return predictions

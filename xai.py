@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     if args.mask_all_features:
         for scale in config["scales"]:
-            for feature in config["features"]:
+            for feature in config[f"{scale}_features"]:
                 mask_features = {scale: [feature]}
                 config["masked_features"] = utils.mask_to_string(mask_features)
                 loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
