@@ -3,7 +3,7 @@ import modelling.data_pipeline as data_pipeline
 import argparse
 from torchmetrics.classification import MulticlassAccuracy, MulticlassF1Score, MulticlassPrecision, MulticlassRecall
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision, BinaryRecall
-from torchmetrics.segmentation import MeanIoU
+from torchmetrics.regression import CriticalSuccessIndex
 import torch
 import pandas as pd
 import os
@@ -34,13 +34,13 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             precision = BinaryPrecision().to(device)
             recall = BinaryRecall().to(device)
             accuracy = BinaryAccuracy().to(device)
-            #iou = MeanIoU(num_classes=1, input_format="index").to(device)
+            csi = CriticalSuccessIndex(threshold=0.5).to(device)
         else:
             f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
             precision = MulticlassPrecision(num_classes=config["num_classes"], average=None).to(device)
             recall = MulticlassRecall(num_classes=config["num_classes"], average=None).to(device)
             accuracy = MulticlassAccuracy(num_classes=config["num_classes"], average=None).to(device)
-            #iou = MeanIoU(num_classes=config["num_classes"], per_class=True, input_format="index").to(device)
+            csi = CriticalSuccessIndex(threshold=0.5).to(device)
         metrics_functions = [f1, precision, recall, accuracy]
         metrics_names = ["f1", "precision", "recall", "accuracy"]
 
@@ -57,7 +57,6 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
                     model_output[f"{scale}_pred"] = torch.argmax(model_output[f"{scale}_pred"], dim=1)
                 if classification:
                     model_output[f"{scale}_pred"], data[f"{scale}_label"] = convert_to_classification(config=config, pred=model_output[f"{scale}_pred"], label=data[f"{scale}_label"])
-                
                 predictions[scale].append(model_output[f"{scale}_pred"])
                 labels[scale].append(data[f"{scale}_label"])
 
@@ -70,8 +69,8 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
         metrics.update({key: [str(value)] for key, value in config.items()})
 
         # calculate metrics from the model predictions
-        for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
-            for scale in output_scales:
+        for scale in output_scales:
+            for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
                 for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
                     if binary_prediction and class_name=="no_flood":
                         metric = metrics_function(1-predictions[scale], 1-labels[scale])
@@ -79,9 +78,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
                         metric = metrics_function(predictions[scale], labels[scale])
                     metric = metric[class_index] if not binary_prediction else metric
                     metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
-                    # if not binary_prediction:
-                    #metric = iou(predictions[scale].long().unsqueeze(-1), labels[scale].long().unsqueeze(-1))[2]
-                    #metrics[f"iou_{scale}"] = [f"{metric.item():.3f}"]
+            metrics[f"csi_{scale}_flood"] = [f"{csi((predictions[scale] == 2).int().float(), (labels[scale] == 2).int().float()).item():.3f}"]
 
         # save the metrics results
         metrics = pd.DataFrame(metrics)
