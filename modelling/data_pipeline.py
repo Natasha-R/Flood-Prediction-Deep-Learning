@@ -150,6 +150,14 @@ class ToTensor(object):
                     data[f"{scale}_label"][data[f"{scale}_label"]==1] = 0
                     data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1
 
+               # convert label to a classification value
+               if self.config.get("classification_threshold", False):
+                    proportion_flood = (data[f"{scale}_label"] == 2).sum() / ((data[f"{scale}_label"] != 0).sum())
+                    if proportion_flood > self.config["classification_threshold"]:
+                         data[f"{scale}_label"] = torch.tensor(2, dtype=torch.int64)
+                    else:
+                         data[f"{scale}_label"] = torch.tensor(1, dtype=torch.int64)
+
           return data
      
 class HorizontalFlip(object):

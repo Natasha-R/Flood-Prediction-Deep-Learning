@@ -66,6 +66,10 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
         org_model = architectures.BasicUNet(config)
     elif config["architecture"].lower()=="branchedunet":
         org_model = architectures.BranchedUNet(config)
+    elif config["architecture"].lower()=="basicresnet":
+       org_model = architectures.BasicResNet(config)
+    elif config["architecture"].lower()=="branchedresnet":
+       org_model = architectures.BranchedResNet(config)
     else:
         raise ValueError(f"Unrecognised model name: '{config['architecture']}'")
 

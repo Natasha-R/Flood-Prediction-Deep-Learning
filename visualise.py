@@ -49,51 +49,58 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(152, 97, 255), 6: (152, 97, 255)} 
     all_patch_paths = []
 
-    for patch_index in range(len(dataset)):
+    model.eval()
+    with torch.no_grad():
 
-        # load in the data patch from the dataset
-        patch_file = dataset.patches[patch_index]
-        sample = dataset[patch_index]
-        for item in sample.keys():
-            sample[item] = sample[item].unsqueeze(0).to(device)
+        for patch_index in range(len(dataset)):
 
-        # make a model prediction from the patch
-        model_output = model(sample)
-        if loss_function=="dice":
-            predicted_class = model_output[f"{scale}_pred"]
-            predicted_class = (torch.sigmoid(predicted_class.squeeze()) > 0.5) * 1
-        else:
-            predicted_class = torch.argmax(model_output[f"{scale}_pred"], dim=1).squeeze()
-        label = sample[f"{scale}_label"].squeeze()
-        if classification:
-            predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
-            predicted_class, label = predicted_class.squeeze(), label.squeeze()
-            label[label == 1] = 2
-            label[label == 0] = 1
-        if loss_function=="dice" or classification:
-            predicted_class[predicted_class == 1] = 2
-            predicted_class[predicted_class == 0] = 1
+            # load in the data patch from the dataset
+            patch_file = dataset.patches[patch_index]
+            sample = dataset[patch_index]
+            for item in sample.keys():
+                sample[item] = sample[item].unsqueeze(0).to(device)
 
-        # evaluate the matching of prediction to label
-        correctly_matching = torch.zeros_like(label)
-        correctly_matching[(label == 2) & (predicted_class == 2)] = 3 # flood predict correct
-        correctly_matching[(label != 2) & (predicted_class == 2)] = 2 # overpredict flood
-        correctly_matching[(label == 2) & (predicted_class != 2)] = 1 # underpredict flood
-        
-        # use the corresponding label file as a reference for the size and geographical bounds of the data patch
-        with rasterio.open(f"{data_folder}/{scale}/label/{patch_file}") as reference_file:
-            meta = reference_file.meta.copy()
-            meta.update({"count": 3, "dtype": "int8", "nodata":0})
+            # make a model prediction from the patch
+            model_output = model(sample)
+            if loss_function=="dice":
+                predicted_class = model_output[f"{scale}_pred"]
+                predicted_class = (torch.sigmoid(predicted_class.squeeze()) > 0.5) * 1
+            else:
+                predicted_class = torch.argmax(model_output[f"{scale}_pred"], dim=1).squeeze()
+            label = sample[f"{scale}_label"].squeeze()
+            if "resnet" in config["architecture"].lower():
+                predicted_class = torch.ones(256, 256).to(device) * predicted_class
+                label = torch.ones(256, 256).to(device) * label
+                sample[f"{scale}_label"] = label
+            if classification:
+                predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
+                predicted_class, label = predicted_class.squeeze(), label.squeeze()
+                label[label == 1] = 2
+                label[label == 0] = 1
+            if loss_function=="dice" or classification:
+                predicted_class[predicted_class == 1] = 2
+                predicted_class[predicted_class == 0] = 1
 
-        # save the predictions for the data patch
-        patch_path = f"{path_folder}/{config_name}_{patch_file}"
-        with rasterio.open(patch_path, "w", **meta, compress="LZW") as file:
-            file.write(predicted_class.squeeze().to(torch.int8).cpu().numpy(), 1)
-            file.write(sample[f"{scale}_label"].squeeze().to(torch.int8).cpu().numpy(), 2)
-            file.write(correctly_matching.to(torch.int8).cpu().numpy(), 3)
-            file.nodata = 0
+            # evaluate the matching of prediction to label
+            correctly_matching = torch.zeros_like(label)
+            correctly_matching[(label == 2) & (predicted_class == 2)] = 3 # flood predict correct
+            correctly_matching[(label != 2) & (predicted_class == 2)] = 2 # overpredict flood
+            correctly_matching[(label == 2) & (predicted_class != 2)] = 1 # underpredict flood
+            
+            # use the corresponding label file as a reference for the size and geographical bounds of the data patch
+            with rasterio.open(f"{data_folder}/{scale}/label/{patch_file}") as reference_file:
+                meta = reference_file.meta.copy()
+                meta.update({"count": 3, "dtype": "int8", "nodata":0})
 
-        all_patch_paths.append(patch_path)
+            # save the predictions for the data patch
+            patch_path = f"{path_folder}/{config_name}_{patch_file}"
+            with rasterio.open(patch_path, "w", **meta, compress="LZW") as file:
+                file.write(predicted_class.squeeze().to(torch.int8).cpu().numpy(), 1)
+                file.write(sample[f"{scale}_label"].squeeze().to(torch.int8).cpu().numpy(), 2)
+                file.write(correctly_matching.to(torch.int8).cpu().numpy(), 3)
+                file.nodata = 0
+
+            all_patch_paths.append(patch_path)
 
     # merge all of the predicted patches together
     all_patches = [rasterio.open(path) for path in all_patch_paths]

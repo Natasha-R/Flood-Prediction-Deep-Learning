@@ -5,6 +5,7 @@ import modelling.utils as utils
 import math
 
 ######## UNet code based on: https://github.com/jaxony/unet-pytorch
+######## ResNet code based on: https://github.com/samcw/ResNet18-Pytorch
 
 def conv3x3(in_channels, out_channels, stride=1, bias=True, groups=1, kernel_size=3):    
     return nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2, bias=bias, groups=groups)
@@ -130,7 +131,9 @@ class BasicUNet(nn.Module):
         self.depth = config.get("depth", 5)
         
         self.scales_with_class = {scale: sum(True for feature in config[f"{scale}_features"] if feature in utils.get_class_features()) for scale in self.scales}
-        self.num_class_feats, self.embedding = create_embeddings(config, "all")
+        embedding_config = config.copy()
+        embedding_config["scales"] = self.scales
+        self.num_class_feats, self.embedding = create_embeddings(embedding_config, "all")
         self.down_convs = []
         self.up_convs = []
         for i in range(depth):
@@ -367,4 +370,246 @@ class BranchedUNet(nn.Module):
             predictions["context_pred"] = context_pred
         if ("basin" in self.scales) and (not self.only_pred_local):
             predictions["basin_pred"] = basin_pred
+        return predictions
+    
+class ClassificationBlock(nn.Module):
+    def __init__(self, inchannel, outchannel, stride=1):
+        super(ClassificationBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(inchannel, outchannel, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm2d(outchannel),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(outchannel, outchannel, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(outchannel)
+        )
+        self.shortcut = nn.Sequential()
+        if stride != 1 or inchannel != outchannel:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(inchannel, outchannel, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(outchannel)
+            )
+            
+    def forward(self, x):
+        out = self.block(x)
+        out = out + self.shortcut(x)
+        out = F.relu(out)
+        
+        return out
+
+class BasicResNet(nn.Module):
+    def __init__(self, config):
+        super(BasicResNet, self).__init__()
+
+        self.scales = config["scales"]
+        if config.get("exclude_scales", False):
+            self.scales = [scale for scale in self.scales if scale not in config["exclude_scales"]]
+        self.num_classes = 3
+        self.only_pred_local = config.get("only_pred_local", True)
+        self.in_channels = sum([utils.find_num_channels(config, scale, embeddings=True) for scale in self.scales])
+        self.scales_with_class = {scale: sum(True for feature in config[f"{scale}_features"] if feature in utils.get_class_features()) for scale in self.scales}
+        embedding_config = config.copy()
+        embedding_config["scales"] = self.scales
+        self.num_class_feats, self.embedding = create_embeddings(embedding_config, "all")
+
+        self.inchannel = 64
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(self.in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False), 
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.layer1 = self.make_layer(ClassificationBlock, 64, 2, stride=1)
+        self.layer2 = self.make_layer(ClassificationBlock, 128, 2, stride=2)
+        self.layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2)        
+        self.layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2)        
+        self.local_final = nn.Linear(512, 3)
+        if ("context" in self.scales) and (not self.only_pred_local):
+            self.context_final = nn.Linear(512, 3)
+        if ("basin" in self.scales) and (not self.only_pred_local):
+            self.basin_final = nn.Linear(512, 3)
+        
+    def make_layer(self, block, channels, num_blocks, stride):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.inchannel, channels, stride))
+            self.inchannel = channels
+        return nn.Sequential(*layers)
+    
+    def forward(self, data):
+
+        if self.num_class_feats:
+            embedding_index = 0
+            embedded_data = []
+            for scale in self.scales_with_class:
+                if self.scales_with_class[scale]:
+                    for index in range(self.scales_with_class[scale]):
+                        embedded_data.append(self.embedding[embedding_index](torch.clip(data[f"{scale}_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2))
+                        embedding_index += 1
+            x = torch.concat([torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1), torch.concat(embedded_data, dim=1)], dim=1)
+        else:
+            x = torch.concat([data[f"{scale}_features"] for scale in self.scales], dim=1)
+    
+        out = self.conv1(x)
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = F.avg_pool2d(out, 8)
+        out = out.view(out.size(0), -1)
+
+        predictions = {"local_pred": self.local_final(out)}
+        if ("context" in self.scales) and (not self.only_pred_local):
+            predictions["context_pred"] = self.context_final(out)
+        if ("basin" in self.scales) and (not self.only_pred_local):
+            predictions["basin_pred"] = self.basin_final(out)
+
+        return predictions
+    
+class BranchedResNet(nn.Module):
+    def __init__(self, config):
+        super(BranchedResNet, self).__init__()
+
+        self.scales = config["scales"]
+        self.only_pred_local = config.get("only_pred_local", True)
+        self.in_channels = {scale: utils.find_num_channels(config, scale, embeddings=True) for scale in config["scales"]}
+        self.inchannel = {"local": 64}
+
+        if "basin" in self.scales:
+            self.basin_num_class_feats, self.basin_embedding = create_embeddings(config, "basin")
+            self.basin_weight = config.get("basin_feat_weight", 1)
+            self.inchannel["basin"] = 64
+            self.basin_conv1 = nn.Sequential(
+                nn.Conv2d(self.in_channels["basin"], 64, kernel_size=7, stride=2, padding=3, bias=False), 
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            self.basin_layer1 = self.make_layer(ClassificationBlock, 64, 2, stride=1, scale="basin")
+            self.basin_layer2 = self.make_layer(ClassificationBlock, 128, 2, stride=2, scale="basin")
+            self.basin_layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2, scale="basin")        
+            self.basin_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="basin")     
+            self.basin_final = nn.Linear(512, 3)
+
+        if "context" in self.scales:
+            self.context_num_class_feats, self.context_embedding = create_embeddings(config, "context")
+            self.context_weight = config.get("context_feat_weight", 1)
+            self.inchannel["context"] = 64
+            self.context_conv1 = nn.Sequential(
+                nn.Conv2d(self.in_channels["context"], 64, kernel_size=7, stride=2, padding=3, bias=False), 
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            self.context_layer1 = self.make_layer(ClassificationBlock, 64, 2, stride=1, scale="context")
+            self.context_layer2 = self.make_layer(ClassificationBlock, 128, 2, stride=2, scale="context")
+            self.context_layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2, scale="context")        
+            self.context_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="context")     
+            self.context_final = nn.Linear(512, 3)
+            if "basin" in self.scales:
+                self.context_attends_basin = CrossScaleAttention(config, depth=6)
+
+        self.local_num_class_feats, self.local_embedding = create_embeddings(config, "local")
+        self.local_weight = config.get("local_feat_weight", 1)
+        self.local_inchannel = 64
+        self.local_conv1 = nn.Sequential(
+            nn.Conv2d(self.in_channels["local"], 64, kernel_size=7, stride=2, padding=3, bias=False), 
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.local_layer1 = self.make_layer(ClassificationBlock, 64, 2, stride=1, scale="local")    # 64 x 32 x 32
+        self.local_layer2 = self.make_layer(ClassificationBlock, 128, 2, stride=2, scale="local")   # 128 x 32 x 32
+        self.local_layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2, scale="local")   # 256 x 16 x 16
+        self.local_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="local")   # 512 x 8 x 8  
+        self.local_final = nn.Linear(512, 3)
+        self.local_attends_higher = CrossScaleAttention(config, depth=6)
+
+        if ("context" in self.scales) and (not self.only_pred_local):
+            self.context_final = nn.Linear(512, 3)
+        if ("basin" in self.scales) and (not self.only_pred_local):
+            self.basin_final = nn.Linear(512, 3)
+        
+    def make_layer(self, block, channels, num_blocks, stride, scale):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.inchannel[scale], channels, stride))
+            self.inchannel[scale] = channels
+        return nn.Sequential(*layers)
+    
+    def forward(self, data):
+
+        final_features = {}
+
+        if "basin" in self.scales:
+            if self.basin_num_class_feats:
+                basin = torch.concat([data[f"basin_features"]] + [self.basin_embedding[index](torch.clip(data[f"basin_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.basin_num_class_feats)], dim=1)
+            else:
+                basin = data[f"basin_features"]
+            basin = basin * self.basin_weight
+
+            basin = self.basin_conv1(basin)
+            basin = self.basin_layer1(basin)
+            basin = self.basin_layer2(basin)
+            basin = self.basin_layer3(basin)
+            basin = self.basin_layer4(basin)
+            final_features["basin"] = basin
+
+        if "context" in self.scales:
+
+            if self.context_num_class_feats:
+                context = torch.concat([data[f"context_features"]] + [self.context_embedding[index](torch.clip(data[f"context_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.context_num_class_feats)], dim=1)
+            else:
+                context = data[f"context_features"]
+            context = context * self.context_weight
+            context = self.context_conv1(context)
+            context = self.context_layer1(context)
+            context = self.context_layer2(context)
+            context = self.context_layer3(context)
+            context = self.context_layer4(context)
+            final_features["context"] = context
+
+        if self.local_num_class_feats:
+             local = torch.concat([data[f"local_features"]] + [self.local_embedding[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.local_num_class_feats)], dim=1)
+        else:
+            local = data[f"local_features"]
+        local = local * self.local_weight
+
+        local = self.local_conv1(local)
+        local = self.local_layer1(local)
+        local = self.local_layer2(local)
+        local = self.local_layer3(local)
+        local = self.local_layer4(local)
+        final_features["local"] = local
+
+        if "basin" in self.scales:
+            if "context" in self.scales:
+                context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
+            else:
+                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
+        else:
+            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        if not self.only_pred_local:
+            if "basin" in self.scales:
+                x = final_features["basin"]
+                x = F.avg_pool2d(x, 8)
+                x = x.view(x.size(0), -1)
+                basin_pred = self.basin_final(x)
+
+            if "context" in self.scales:
+                x = context_attended_basin if "basin" in self.scales else final_features["context"]
+                x = F.avg_pool2d(x, 8)
+                x = x.view(x.size(0), -1)
+                context_pred = self.context_final(x)
+
+        x = local_attended_higher
+        x = F.avg_pool2d(x, 8)
+        x = x.view(x.size(0), -1)
+        local_pred = self.local_final(x)
+
+        predictions = {"local_pred": local_pred}
+        if ("context" in self.scales) and (not self.only_pred_local):
+            predictions["context_pred"] = context_pred
+        if ("basin" in self.scales) and (not self.only_pred_local):
+            predictions["basin_pred"] = basin_pred
+
         return predictions
