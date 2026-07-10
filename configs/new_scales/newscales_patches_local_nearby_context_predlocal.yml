@@ -1,0 +1,25 @@
+architecture: "BranchedUNet"
+kernel_size: 5
+use_attention: True
+
+only_pred_local: True
+residuals_all_scales: True
+
+local_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+nearby_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+context_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+use_consistent_context: True
+
+class_weights: [0, 0.550, 1.450]
+use_scheduler: False
+number_epochs: 100
+learning_rate: 0.0001
+dropout: 0.1
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 100
+compute_metrics_on_epoch: 10
+
+data_subset_file: "only_patches_data_subset"

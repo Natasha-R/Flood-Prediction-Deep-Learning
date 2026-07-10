@@ -110,7 +110,7 @@ def download_sentinel1(data_folder, scale):
         sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
     aois["one_week_previous"] = aois["event_date"] - pd.Timedelta(days=7)
     aois["180_days_previous"] = aois["event_date"] - pd.Timedelta(days=180)
-    resolution = {"local":10, "context":100, "basin":1000}[scale]
+    resolution = {"local":10, "nearby":25, "context":100, "con_context":100, "basin":1000}[scale]
     if not os.path.isdir(sentinel1_folder):
         os.mkdir(sentinel1_folder)
 

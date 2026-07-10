@@ -148,6 +148,8 @@ class BasicUNet(nn.Module):
             up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
             self.up_convs.append(up_conv)
         self.local_final = conv1x1(outs, self.num_classes)
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            self.nearby_final = conv1x1(outs, self.num_classes)
         if ("context" in self.scales) and (not self.only_pred_local):
             self.context_final = conv1x1(outs, self.num_classes)
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -178,6 +180,8 @@ class BasicUNet(nn.Module):
             x = module(before_pool, x)
 
         predictions = {"local_pred": self.local_final(x)}
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            predictions["nearby_pred"] = self.nearby_final(x)
         if ("context" in self.scales) and (not self.only_pred_local):
             predictions["context_pred"] = self.context_final(x)
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -245,7 +249,32 @@ class BranchedUNet(nn.Module):
                 self.context_up_convs = nn.ModuleList(self.context_up_convs)
                 self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
             if "basin" in self.scales:
-                self.context_attends_basin = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+                self.context_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+
+        # set up nearby encoder and decoder
+        if "nearby" in self.scales:
+            self.nearby_num_class_feats, self.nearby_embedding = create_embeddings(config, "nearby")
+            self.nearby_down_convs = []
+            for i in range(depth):
+                ins = self.in_channels["nearby"] if i == 0 else outs
+                outs = self.start_filts*(2**i)
+                pooling = True if i < depth-1 else False
+                down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
+                self.nearby_down_convs.append(down_conv)
+            self.nearby_down_convs = nn.ModuleList(self.nearby_down_convs)
+            self.nearby_weight = config.get("nearby_feat_weight", 1)
+            num_other_scales = len(self.scales)-2
+            if not self.only_pred_local:
+                self.nearby_up_convs = []
+                for i in range(depth-1):
+                    ins = outs
+                    outs = ins // 2
+                    up_conv = UpConv(ins, outs, num_scales = 1 + num_other_scales if self.residuals_all_scales else 1, dropout=self.dropout, kernel_size=self.kernel_size)
+                    self.nearby_up_convs.append(up_conv)
+                self.nearby_up_convs = nn.ModuleList(self.nearby_up_convs)
+                self.nearby_final = conv1x1(outs, self.num_classes) #BclassesHW
+            if ("context" in self.scales) or ("basin" in self.scales):
+                self.nearby_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
                 
         self.local_down_convs = []
         self.local_up_convs = []
@@ -295,6 +324,18 @@ class BranchedUNet(nn.Module):
                 context_encoder_outs.append(context_before_pool)
             final_features["context"] = context
 
+        if "nearby" in self.scales:
+            nearby_encoder_outs = []
+            if self.nearby_num_class_feats:
+                nearby = torch.concat([data[f"nearby_features"]] + [self.nearby_embedding[index](torch.clip(data[f"nearby_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.nearby_num_class_feats)], dim=1)
+            else:
+                nearby = data[f"nearby_features"]
+            nearby = nearby * self.nearby_weight
+            for i, module in enumerate(self.nearby_down_convs):
+                nearby, nearby_before_pool = module(nearby)
+                nearby_encoder_outs.append(nearby_before_pool)
+            final_features["nearby"] = nearby
+
         local_encoder_outs = []
         if self.local_num_class_feats:
              local = torch.concat([data[f"local_features"]] + [self.local_embedding[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.local_num_class_feats)], dim=1)
@@ -307,15 +348,31 @@ class BranchedUNet(nn.Module):
         final_features["local"] = local
 
         if "basin" in self.scales:
-            if "context" in self.scales:
-                context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
-                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
-            else:
+            if "context" in self.scales: # basin and context
+                context_attended_higher = self.context_attends_higher(final_features["context"], final_features["basin"])
+                if "nearby" in self.scales: # basin and context and nearby
+                    nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], context_attended_higher)
+                    local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+                else: # basin and context, no nearby
+                    local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_higher)
+            elif "nearby" in self.scales: # basin and nearby, no context
+                nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], final_features["basin"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+            else: # basin only, no context or nearby
                 local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
-        else:
-            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        elif "context" in self.scales: # no basin
+            if "nearby" in self.scales: # context and nearby, no basin
+                nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], final_features["context"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+            else: # context only, no nearby or basin
+                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        elif "nearby" in self.scales: # no basin or context
+            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["nearby"])
 
         if not self.only_pred_local:
+
             if "basin" in self.scales:
                 x = final_features["basin"]
                 for i, module in enumerate(self.basin_up_convs):
@@ -325,7 +382,7 @@ class BranchedUNet(nn.Module):
 
             if "context" in self.scales:
                 if (self.residuals_all_scales) and ("basin" in self.scales):
-                    x = context_attended_basin
+                    x = context_attended_higher
                     for i, module in enumerate(self.context_up_convs):
                         up_features = []
                         basin_before_pool = basin_encoder_outs[-(i+2)]
@@ -336,11 +393,35 @@ class BranchedUNet(nn.Module):
                         x = module(before_pool, x)
                     context_pred = self.context_final(x)
                 else:
-                    x = context_attended_basin if "basin" in self.scales else final_features["context"]
+                    x = context_attended_higher if "basin" in self.scales else final_features["context"]
                     for i, module in enumerate(self.context_up_convs):
                         context_before_pool = context_encoder_outs[-(i+2)]
                         x = module(context_before_pool, x)
                     context_pred = self.context_final(x)
+
+            if "nearby" in self.scales:
+                if (self.residuals_all_scales) and (("basin" in self.scales) or ("context" in self.scales)):
+                    x = nearby_attended_higher
+                    for i, module in enumerate(self.nearby_up_convs):
+                        up_features = []
+                        if "basin" in self.scales:
+                            basin_before_pool = basin_encoder_outs[-(i+2)]
+                            up_features.append(basin_before_pool)
+                        if "context" in self.scales:
+                            context_before_pool = context_encoder_outs[-(i+2)]
+                            up_features.append(context_before_pool)
+                        nearby_before_pool = nearby_encoder_outs[-(i+2)]
+                        up_features.append(nearby_before_pool)
+                        before_pool = torch.cat(up_features, dim=1)
+                        x = module(before_pool, x)
+                    nearby_pred = self.nearby_final(x)
+
+                else:
+                    x = nearby_attended_higher if ("basin" in self.scales) or ("context" in self.scales) else final_features["nearby"]
+                    for i, module in enumerate(self.nearby_up_convs):
+                        nearby_before_pool = nearby_encoder_outs[-(i+2)]
+                        x = module(nearby_before_pool, x)
+                    nearby_pred = self.nearby_final(x)
 
         if self.residuals_all_scales:
             x = local_attended_higher
@@ -352,6 +433,9 @@ class BranchedUNet(nn.Module):
                 if "context" in self.scales:
                     context_before_pool = context_encoder_outs[-(i+2)]
                     up_features.append(context_before_pool)
+                if "nearby" in self.scales:
+                    nearby_before_pool = nearby_encoder_outs[-(i+2)]
+                    up_features.append(nearby_before_pool)
                 local_before_pool = local_encoder_outs[-(i+2)]
                 up_features.append(local_before_pool)
                 before_pool = torch.cat(up_features, dim=1)
@@ -366,6 +450,8 @@ class BranchedUNet(nn.Module):
             local_pred = self.local_final(x)
                 
         predictions = {"local_pred": local_pred}
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            predictions["nearby_pred"] = nearby_pred
         if ("context" in self.scales) and (not self.only_pred_local):
             predictions["context_pred"] = context_pred
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -422,6 +508,8 @@ class BasicResNet(nn.Module):
         self.layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2)        
         self.layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2)        
         self.local_final = nn.Linear(512, 3)
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            self.nearby_final = nn.Linear(512, 3)
         if ("context" in self.scales) and (not self.only_pred_local):
             self.context_final = nn.Linear(512, 3)
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -458,6 +546,8 @@ class BasicResNet(nn.Module):
         out = out.view(out.size(0), -1)
 
         predictions = {"local_pred": self.local_final(out)}
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            predictions["nearby_pred"] = self.nearby_final(out)
         if ("context" in self.scales) and (not self.only_pred_local):
             predictions["context_pred"] = self.context_final(out)
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -504,7 +594,24 @@ class BranchedResNet(nn.Module):
             self.context_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="context")     
             self.context_final = nn.Linear(512, 3)
             if "basin" in self.scales:
-                self.context_attends_basin = CrossScaleAttention(config, depth=6)
+                self.context_attends_higher = CrossScaleAttention(config, depth=6)
+
+        if "nearby" in self.scales:
+            self.nearby_num_class_feats, self.nearby_embedding = create_embeddings(config, "nearby")
+            self.nearby_weight = config.get("nearby_feat_weight", 1)
+            self.inchannel["nearby"] = 64
+            self.nearby_conv1 = nn.Sequential(
+                nn.Conv2d(self.in_channels["nearby"], 64, kernel_size=7, stride=2, padding=3, bias=False), 
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            self.nearby_layer1 = self.make_layer(ClassificationBlock, 64, 2, stride=1, scale="nearby")
+            self.nearby_layer2 = self.make_layer(ClassificationBlock, 128, 2, stride=2, scale="nearby")
+            self.nearby_layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2, scale="nearby")        
+            self.nearby_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="nearby")     
+            self.nearby_final = nn.Linear(512, 3)
+            if ("basin" in self.scales) or ("context" in self.scales):
+                self.nearby_attends_higher = CrossScaleAttention(config, depth=6)
 
         self.local_num_class_feats, self.local_embedding = create_embeddings(config, "local")
         self.local_weight = config.get("local_feat_weight", 1)
@@ -521,6 +628,8 @@ class BranchedResNet(nn.Module):
         self.local_final = nn.Linear(512, 3)
         self.local_attends_higher = CrossScaleAttention(config, depth=6)
 
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            self.nearby_final = nn.Linear(512, 3)
         if ("context" in self.scales) and (not self.only_pred_local):
             self.context_final = nn.Linear(512, 3)
         if ("basin" in self.scales) and (not self.only_pred_local):
@@ -566,6 +675,20 @@ class BranchedResNet(nn.Module):
             context = self.context_layer4(context)
             final_features["context"] = context
 
+        if "nearby" in self.scales:
+
+            if self.nearby_num_class_feats:
+                nearby = torch.concat([data[f"nearby_features"]] + [self.nearby_embedding[index](torch.clip(data[f"nearby_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.nearby_num_class_feats)], dim=1)
+            else:
+                nearby = data[f"nearby_features"]
+            nearby = nearby * self.nearby_weight
+            nearby = self.nearby_conv1(nearby)
+            nearby = self.nearby_layer1(nearby)
+            nearby = self.nearby_layer2(nearby)
+            nearby = self.nearby_layer3(nearby)
+            nearby = self.nearby_layer4(nearby)
+            final_features["nearby"] = nearby
+
         if self.local_num_class_feats:
              local = torch.concat([data[f"local_features"]] + [self.local_embedding[index](torch.clip(data[f"local_classes"][:, index, :, :], 0, 30).int()).squeeze(1).permute(0, 3, 1, 2) for index in range(self.local_num_class_feats)], dim=1)
         else:
@@ -578,15 +701,30 @@ class BranchedResNet(nn.Module):
         local = self.local_layer3(local)
         local = self.local_layer4(local)
         final_features["local"] = local
-
+        
         if "basin" in self.scales:
-            if "context" in self.scales:
-                context_attended_basin = self.context_attends_basin(final_features["context"], final_features["basin"])
-                local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_basin)
-            else:
+            if "context" in self.scales: # basin and context
+                context_attended_higher = self.context_attends_higher(final_features["context"], final_features["basin"])
+                if "nearby" in self.scales: # basin and context and nearby
+                    nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], context_attended_higher)
+                    local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+                else: # basin and context, no nearby
+                    local_attended_higher = self.local_attends_higher(final_features["local"], context_attended_higher)
+            elif "nearby" in self.scales: # basin and nearby, no context
+                nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], final_features["basin"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+            else: # basin only, no context or nearby
                 local_attended_higher = self.local_attends_higher(final_features["local"], final_features["basin"])
-        else:
-            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        elif "context" in self.scales: # no basin
+            if "nearby" in self.scales: # context and nearby, no basin
+                nearby_attended_higher = self.nearby_attends_higher(final_features["nearby"], final_features["context"])
+                local_attended_higher = self.local_attends_higher(final_features["local"], nearby_attended_higher)
+            else: # context only, no nearby or basin
+                local_attended_higher = self.local_attends_higher(final_features["local"], final_features["context"])
+
+        elif "nearby" in self.scales: # no basin or context
+            local_attended_higher = self.local_attends_higher(final_features["local"], final_features["nearby"])
 
         if not self.only_pred_local:
             if "basin" in self.scales:
@@ -596,10 +734,16 @@ class BranchedResNet(nn.Module):
                 basin_pred = self.basin_final(x)
 
             if "context" in self.scales:
-                x = context_attended_basin if "basin" in self.scales else final_features["context"]
+                x = context_attended_higher if "basin" in self.scales else final_features["context"]
                 x = F.avg_pool2d(x, 8)
                 x = x.view(x.size(0), -1)
                 context_pred = self.context_final(x)
+
+            if "nearby" in self.scales:
+                x = nearby_attended_higher if ("basin" in self.scales) or ("context" in self.scales) else final_features["nearby"]
+                x = F.avg_pool2d(x, 8)
+                x = x.view(x.size(0), -1)
+                nearby_pred = self.nearby_final(x)
 
         x = local_attended_higher
         x = F.avg_pool2d(x, 8)
@@ -607,6 +751,8 @@ class BranchedResNet(nn.Module):
         local_pred = self.local_final(x)
 
         predictions = {"local_pred": local_pred}
+        if ("nearby" in self.scales) and (not self.only_pred_local):
+            predictions["nearby_pred"] = nearby_pred
         if ("context" in self.scales) and (not self.only_pred_local):
             predictions["context_pred"] = context_pred
         if ("basin" in self.scales) and (not self.only_pred_local):

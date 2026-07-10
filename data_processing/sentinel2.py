@@ -190,7 +190,7 @@ def download_sentinel2(data_folder, scale):
         sentinel2_folder = f"{data_folder}/{scale}/download_sentinel2/"
     if not os.path.isdir(sentinel2_folder):
         os.mkdir(sentinel2_folder)
-    resolution = {"local":10, "context":100, "basin":1000}[scale]
+    resolution = {"local":10, "nearby":25, "context":100, "con_context":100, "basin":1000}[scale]
 
     for index in tqdm(range(len(aois)), desc=f"Download Sentinel 2 data for {scale} scale"):
 

@@ -56,6 +56,7 @@ class FloodDataset(torch.utils.data.Dataset):
           self.derived_features = utils.get_derived_features()
 
           self.scales = self.config["scales"]
+          self.use_consistent_context = self.config.get("use_consistent_context", False)
           self.features = {scale: [feature for feature in self.config[f"{scale}_features"]] for scale in self.scales}
           self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
           self.derived_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.derived_features]) for scale in self.scales}
@@ -92,12 +93,13 @@ class FloodDataset(torch.utils.data.Dataset):
 
      def get_data(self, index, scale, class_feature):
 
+          scale_folder = "con_context" if scale == "context" and self.use_consistent_context else scale
           # imported features
-          data = [tf.imread(f"{self.data_folder}/{scale}/{feature}/{self.patches[index]}") for feature in self.features[scale] if\
+          data = [tf.imread(f"{self.data_folder}/{scale_folder}/{feature}/{self.patches[index]}") for feature in self.features[scale] if\
                   (((feature in self.class_features) == class_feature) and (feature not in self.derived_features))]
           # derived features
           if self.derived_exists[scale]:
-               data = data + [self.calculate_indices(index, scale)]
+               data = data + [self.calculate_indices(index, scale_folder)]
           return data
      
      def get_label(self, index, scale):

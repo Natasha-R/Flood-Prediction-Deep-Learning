@@ -9,6 +9,8 @@ import shapely
 from shapely.geometry import box
 import warnings
 import sentinelhub
+from shapely.affinity import scale
+from data_processing.labels import find_utm
 pd.options.mode.chained_assignment = None
 warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS", category=UserWarning)
 
@@ -99,8 +101,9 @@ def create_raster_metadata(data_folder):
 
 def find_wider_scale_bounds(data_folder, global_folder):
     """
-    Find the boundaries of the wider scales (context and basin) from the local patch bounds.
+    Find the boundaries of the wider scales (nearby, context and basin) from the local patch bounds.
     The "context" scale corresponds to the level 12 basin, and the "basin" scale corresponds to the level 6 basin.
+    The "consistent context (con_context)" is 100 metre resolution, and the nearby context 25 metre resolution.
     """
     # import in the polygons for the basins at level 6 and 12
     print("Importing global river basin polygon reference data...")
@@ -189,6 +192,47 @@ def find_wider_scale_bounds(data_folder, global_folder):
         os.mkdir(f"{data_folder}/context/")
     if not os.path.isdir(f"{data_folder}/basin"):
         os.mkdir(f"{data_folder}/basin/")
+
+    # define the extents consistent context and nearby scales
+    scales = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
+    scales[f"patch_geometry_poly"] = scales[f"patch_geometry"].apply(shapely.wkt.loads)
+    geometries = {"con_context":[], "nearby":[]}
+    for _, row in tqdm(scales.iterrows(), desc="Find the consistent context and nearby scale boundaries"):
+        for scale_name, scale_resolution in zip(["con_context", "nearby"], [100, 25]):
+            local_geom = row["patch_geometry_poly"]
+            utm = str(find_utm(local_geom.centroid.y, local_geom.centroid.x))
+            utm_local_geom = gpd.GeoDataFrame(geometry=[local_geom], crs="4326").to_crs(utm)["geometry"].item()
+            wider_patch = scale(utm_local_geom, xfact=scale_resolution/10, yfact=scale_resolution/10, origin=utm_local_geom.centroid)
+            scale_gdf = gpd.GeoDataFrame({f"{scale_name}_geometry":[0]}, geometry=[wider_patch], crs=utm).to_crs("4326")
+            scale_gdf[f"{scale_name}_geometry"] = scale_gdf["geometry"].astype(str)
+            geometries[scale_name].append(scale_gdf)
+    new_scales = pd.concat([gpd.GeoDataFrame(pd.concat(geometries[scale_name], ignore_index=True), crs="4326")[[f"{scale_name}_geometry"]] for scale_name in ["con_context", "nearby"]], axis=1)
+    scales = pd.concat([scales, new_scales], axis=1)
+    scales = scales[list(scales.columns[:3]) + ["con_context_geometry", "nearby_geometry"] + list(scales.columns[3:13])]
+    scales.to_file(f"{data_folder}/metadata/scales.geojson")
+
+    # define the combined aoi extents for the consistent context and nearby scales
+    scales_aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
+    aois = {"con_context":[], "nearby":[]}
+    for _, row in tqdm(scales_aois.iterrows(), desc="Find the consistent context and nearby combined aoi boundaries"):
+        scales_aoi = scales[scales["geometry_event_date_id"]==row["geometry_event_date_id"]]
+        for scale_name in ["con_context", "nearby"]:
+            aoi_merge = unary_union(scales_aoi[f"{scale_name}_geometry"].apply(shapely.wkt.loads))
+            aoi_merge = gpd.GeoDataFrame({f"{scale_name}_geometry":[0]}, geometry=[aoi_merge], crs="4326")
+            aoi_merge[f"{scale_name}_geometry"] = aoi_merge["geometry"].astype(str)
+            aois[scale_name].append(aoi_merge)
+    new_aois = pd.concat([gpd.GeoDataFrame(pd.concat(aois[scale_name], ignore_index=True), crs="4326")[[f"{scale_name}_geometry"]] for scale_name in ["con_context", "nearby"]], axis=1)
+    for geometry in ["con_context_geometry", "nearby_geometry"]:
+        multi = new_aois[geometry].astype(str).str.contains("MULTI")
+        new_aois.loc[multi, geometry] = new_aois.loc[multi, geometry].apply(shapely.wkt.loads).apply(lambda row : unary_union(row).convex_hull).astype(str)
+    scales_aois = pd.concat([scales_aois, new_aois], axis=1)
+    scales_aois = scales_aois[list(scales_aois.columns[:5])  + ["con_context_geometry", "nearby_geometry"] + list(scales_aois.columns[5:9])]
+    scales_aois.to_file(f"{data_folder}/metadata/scales_aois.geojson")
+
+    if not os.path.isdir(f"{data_folder}/con_context"):
+        os.mkdir(f"{data_folder}/con_context/")
+    if not os.path.isdir(f"{data_folder}/nearby"):
+        os.mkdir(f"{data_folder}/nearby/")
 
 if __name__ == "__main__":
 
