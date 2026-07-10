@@ -1,0 +1,23 @@
+architecture: "BranchedResNet"
+kernel_size: 5
+
+classification_threshold: 0.05
+
+only_pred_local: True
+local_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+context_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+basin_features: ["sentinel1", "sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover"]
+
+class_weights: [0, 0.71, 1.67]
+use_scheduler: False
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+number_epochs: 100
+dropout: 0
+
+save_model_on_epoch: 100
+compute_metrics_on_epoch: 10
+
+data_subset_file: "only_patches_no_flood_data_subset"
