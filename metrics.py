@@ -3,7 +3,7 @@ import modelling.data_pipeline as data_pipeline
 import argparse
 from torchmetrics.classification import MulticlassAccuracy, MulticlassF1Score, MulticlassPrecision, MulticlassRecall
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryPrecision, BinaryRecall
-from torchmetrics.regression import CriticalSuccessIndex
+from torchmetrics.regression import CriticalSuccessIndex, MeanAbsoluteError, NormalizedRootMeanSquaredError, MeanSquaredError, R2Score
 import torch
 import pandas as pd
 import os
@@ -27,6 +27,7 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
         config["resolution"] = resolution
         config["classification_evaluation"] = classification
         output_scales = ["local"] if config["only_pred_local"] else config["scales"]
+        predict_feature = config.get("predict_feature", False)
 
         # define the metrics functions for both the binary and multi-class cases
         if binary_prediction:
@@ -35,24 +36,38 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             recall = BinaryRecall().to(device)
             accuracy = BinaryAccuracy().to(device)
             csi = CriticalSuccessIndex(threshold=0.5).to(device)
-        else:
+
+        elif not predict_feature:
             f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
             precision = MulticlassPrecision(num_classes=config["num_classes"], average=None).to(device)
             recall = MulticlassRecall(num_classes=config["num_classes"], average=None).to(device)
             accuracy = MulticlassAccuracy(num_classes=config["num_classes"], average=None).to(device)
             csi = CriticalSuccessIndex(threshold=0.5).to(device)
-        metrics_functions = [f1, precision, recall, accuracy]
-        metrics_names = ["f1", "precision", "recall", "accuracy"]
+
+            metrics_functions = [f1, precision, recall, accuracy]
+            metrics_names = ["f1", "precision", "recall", "accuracy"]
+
+        else:
+            mae = MeanAbsoluteError().to(device)
+            mse = MeanSquaredError().to(device)
+            nrmse = NormalizedRootMeanSquaredError().to(device)
+            r2 = R2Score().to(device)
+            metrics_functions = [mae, mse, nrmse, r2]
+            metrics_names = ["mae", "mse", "nrmse", "r2"]
 
         # make model predictions on the dataset
         predictions, labels = defaultdict(list), defaultdict(list)
         for data in loader:
             for item in data.keys():
-                data[item] = data[item].to(device)
+                if "metadata" not in item:
+                    data[item] = data[item].to(device)
             model_output = model(data)
             for scale in output_scales:
                 if loss_function == "dice":
                     model_output[f"{scale}_pred"] = (torch.sigmoid(model_output[f"{scale}_pred"].squeeze()) > 0.5)*1
+                elif predict_feature:
+                    model_output[f"{scale}_pred"] = model_output[f"{scale}_pred"].flatten()
+                    data[f"{scale}_label"] = data[f"{scale}_label"].flatten()
                 else:
                     model_output[f"{scale}_pred"] = torch.argmax(model_output[f"{scale}_pred"], dim=1)
                 if classification:
@@ -70,15 +85,20 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
 
         # calculate metrics from the model predictions
         for scale in output_scales:
-            for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
+            if not predict_feature:
+                for class_name, class_index in zip(["flood", "no_flood"], [2, 1]):
+                    for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
+                        if binary_prediction and class_name=="no_flood":
+                            metric = metrics_function(1-predictions[scale], 1-labels[scale])
+                        else:
+                            metric = metrics_function(predictions[scale], labels[scale])
+                        metric = metric[class_index] if not binary_prediction else metric
+                        metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
+                    metrics[f"csi_{scale}_flood"] = [f"{csi((predictions[scale] == 2).int().float(), (labels[scale] == 2).int().float()).item():.3f}"]
+            else:
                 for metrics_name, metrics_function in zip(metrics_names, metrics_functions):
-                    if binary_prediction and class_name=="no_flood":
-                        metric = metrics_function(1-predictions[scale], 1-labels[scale])
-                    else:
-                        metric = metrics_function(predictions[scale], labels[scale])
-                    metric = metric[class_index] if not binary_prediction else metric
-                    metrics[f"{metrics_name}_{scale}_{class_name}"] = [f"{metric.item():.3f}"]
-            metrics[f"csi_{scale}_flood"] = [f"{csi((predictions[scale] == 2).int().float(), (labels[scale] == 2).int().float()).item():.3f}"]
+                    metric = metrics_function(predictions[scale], labels[scale])
+                    metrics[f"{metrics_name}_{scale}"] = [f"{metric.item():.3f}"]
 
         # save the metrics results
         metrics = pd.DataFrame(metrics)

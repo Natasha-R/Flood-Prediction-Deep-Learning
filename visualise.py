@@ -13,6 +13,7 @@ from scipy.ndimage import binary_erosion
 from shapely.geometry import box
 import geopandas as gpd
 from metrics import convert_to_classification
+import json
 
 def hatch_mask(mask, spacing=8, thickness=1, direction="+"):
     yy, xx = np.indices(mask.shape)
@@ -22,6 +23,21 @@ def hatch_mask(mask, spacing=8, thickness=1, direction="+"):
         pattern = ((xx - yy) % spacing) < thickness
     hatch = mask & pattern
     return hatch
+
+def denormalise_feature(patch, predict_feature, data_folder):
+
+    with open(f"{data_folder}/metadata/zscore.json") as file:
+        zscore = json.load(file)
+    patch = (patch * zscore[predict_feature][str(0)]["scale"]) + zscore[predict_feature][str(0)]["shift"]
+    if predict_feature == "dem":
+        patch = torch.exp(patch) - 200
+    elif predict_feature == "sentinel2":
+        for band in [0, 1, 2, 9]:
+            patch[band] = torch.exp(patch[band])
+        patch -= 2
+    elif predict_feature in ["precipitation", "summary_precipitation", "slope", "hand"]:
+        patch = torch.exp(patch) - 1
+    return patch
 
 def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
                           scale, patch, pred_only, border, classification, sensitivity, resolution, mask_features=None, mask_patch=None):
@@ -33,6 +49,9 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
         config["classification_evaluation"] = classification
         config["sensitivity"] = sensitivity
         config["resolution"] = resolution
+    predict_feature = config.get("predict_feature", False)
+    torch_dtype = torch.int8 if not predict_feature else torch.float32
+    numpy_dtype = "int8" if not predict_feature else "float32"
 
     # load the dataset
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_patch=mask_patch)
@@ -58,16 +77,22 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             patch_file = dataset.patches[patch_index]
             sample = dataset[patch_index]
             for item in sample.keys():
-                sample[item] = sample[item].unsqueeze(0).to(device)
+                if "metadata" not in item:
+                    sample[item] = sample[item].unsqueeze(0).to(device)
 
             # make a model prediction from the patch
             model_output = model(sample)
             if loss_function=="dice":
                 predicted_class = model_output[f"{scale}_pred"]
                 predicted_class = (torch.sigmoid(predicted_class.squeeze()) > 0.5) * 1
-            else:
+                label = sample[f"{scale}_label"].squeeze()
+            elif not predict_feature:
                 predicted_class = torch.argmax(model_output[f"{scale}_pred"], dim=1).squeeze()
-            label = sample[f"{scale}_label"].squeeze()
+                label = sample[f"{scale}_label"].squeeze()
+            else: 
+                predicted_class = denormalise_feature(model_output[f"{scale}_pred"].squeeze(), predict_feature, data_folder)
+                label = denormalise_feature(sample[f"{scale}_label"].squeeze(), predict_feature, data_folder)
+                sample[f"{scale}_label"] = label
             if "resnet" in config["architecture"].lower():
                 predicted_class = torch.ones(256, 256).to(device) * predicted_class
                 label = torch.ones(256, 256).to(device) * label
@@ -82,22 +107,26 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                 predicted_class[predicted_class == 0] = 1
 
             # evaluate the matching of prediction to label
-            correctly_matching = torch.zeros_like(label)
-            correctly_matching[(label == 2) & (predicted_class == 2)] = 3 # flood predict correct
-            correctly_matching[(label != 2) & (predicted_class == 2)] = 2 # overpredict flood
-            correctly_matching[(label == 2) & (predicted_class != 2)] = 1 # underpredict flood
+            if not predict_feature:
+                correctly_matching = torch.zeros_like(label)
+                correctly_matching[(label == 2) & (predicted_class == 2)] = 3 # flood predict correct
+                correctly_matching[(label != 2) & (predicted_class == 2)] = 2 # overpredict flood
+                correctly_matching[(label == 2) & (predicted_class != 2)] = 1 # underpredict flood
+            else:
+                correctly_matching = torch.zeros_like(label)
             
             # use the corresponding label file as a reference for the size and geographical bounds of the data patch
             with rasterio.open(f"{data_folder}/{scale}/label/{patch_file}") as reference_file:
                 meta = reference_file.meta.copy()
-                meta.update({"count": 3, "dtype": "int8", "nodata":0})
+                meta.update({"count": 3, "dtype": numpy_dtype, "nodata":0})
 
             # save the predictions for the data patch
             patch_path = f"{path_folder}/{config_name}_{patch_file}"
             with rasterio.open(patch_path, "w", **meta, compress="LZW") as file:
-                file.write(predicted_class.squeeze().to(torch.int8).cpu().numpy(), 1)
-                file.write(sample[f"{scale}_label"].squeeze().to(torch.int8).cpu().numpy(), 2)
-                file.write(correctly_matching.to(torch.int8).cpu().numpy(), 3)
+                
+                file.write(predicted_class.squeeze().to(torch_dtype).cpu().numpy(), 1)
+                file.write(sample[f"{scale}_label"].squeeze().to(torch_dtype).cpu().numpy(), 2)
+                file.write(correctly_matching.to(torch_dtype).cpu().numpy(), 3)
                 file.nodata = 0
 
             all_patch_paths.append(patch_path)
@@ -105,10 +134,11 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     # merge all of the predicted patches together
     all_patches = [rasterio.open(path) for path in all_patch_paths]
     full_subevent, full_subevent_transform = merge(all_patches)
-    for index in [0, 2]: full_subevent[index] = np.where(full_subevent[1] == 0, 0, full_subevent[index])
+    if not predict_feature:
+        for index in [0, 2]: full_subevent[index] = np.where(full_subevent[1] == 0, 0, full_subevent[index])
     full_subevent_meta = all_patches[0].meta.copy()
     full_subevent_meta.update({"height": full_subevent.shape[1], "width": full_subevent.shape[2],
-                               "transform": full_subevent_transform, "dtype": "int8", "nodata": 0})
+                               "transform": full_subevent_transform, "dtype": numpy_dtype, "nodata": 0})
 
     # mark a border around the patches
     if border > 0:
@@ -119,7 +149,7 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                 # patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001)
                 # patch_geometries = patch_geometries.geoms if patch_geometries.geom_type == "MultiPolygon" else [patch_geometries]
                 for geometry in patch_geometries.geometry:
-                    mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=np.int8).astype(bool)
+                    mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=numpy_dtype).astype(bool)
                     if other_subset == "train":
                         hatch = hatch_mask(mask, spacing=50, thickness=border, direction="+")
                         hatch |= hatch_mask(mask, spacing=50, thickness=border, direction="-")
@@ -149,7 +179,7 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
         if pred_only:
             image_names, indices, colour_maps = [image_names[0]], [indices[0]], [colour_maps[0]]
         for image_name, index, colour_map in zip(image_names, indices, colour_maps):
-            rgb_image = np.zeros((full_subevent.shape[1], full_subevent.shape[2], 3), dtype=np.uint8)
+            rgb_image = np.zeros((full_subevent.shape[1], full_subevent.shape[2], 3), dtype=numpy_dtype)
             for value, colour in colour_map.items():
                 for channel in range(3):
                     rgb_image[..., channel][full_subevent[index] == value] = colour[channel]

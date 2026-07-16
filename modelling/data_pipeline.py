@@ -58,6 +58,7 @@ class FloodDataset(torch.utils.data.Dataset):
           self.scales = self.config["scales"]
           self.use_consistent_context = self.config.get("use_consistent_context", False)
           self.features = {scale: [feature for feature in self.config[f"{scale}_features"]] for scale in self.scales}
+          self.predict_feature = self.config.get("predict_feature", False)
           self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
           self.derived_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.derived_features]) for scale in self.scales}
 
@@ -73,6 +74,7 @@ class FloodDataset(torch.utils.data.Dataset):
                data_subset = data_subset[data_subset["patch"]==patch]
           self.data_subset = data_subset
           self.patches = list(data_subset["patch"])
+          self.subevents = list(data_subset["subevent"])
 
           self.transform = transforms.Compose([ToTensor(config),
                                                Normalize(config, data_folder),
@@ -105,15 +107,19 @@ class FloodDataset(torch.utils.data.Dataset):
      def get_label(self, index, scale):
           return tf.imread(f"{self.data_folder}/{scale}/label/{self.patches[index]}")
      
+     def get_img_label(self, index, feature):
+          return tf.imread(f"{self.data_folder}/local/{feature}/{self.patches[index]}")
+
      def __getitem__(self, index):
 
           data = {}
 
           for scale in self.scales:
                data[f"{scale}_features"] = self.get_data(index, scale, class_feature=False)
-               data[f"{scale}_label"] = self.get_label(index, scale)
+               data[f"{scale}_label"] = self.get_label(index, scale) if not self.predict_feature else self.get_img_label(index, self.predict_feature)
                if self.class_exists[scale]:
                     data[f"{scale}_classes"] = self.get_data(index, scale, class_feature=True)
+          data["metadata"] = self.subevents[index]
 
           data = self.transform(data)
 
@@ -126,6 +132,7 @@ class ToTensor(object):
           self.scales = self.config["scales"]
           self.class_features = utils.get_class_features()
           self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
+          self.predict_feature = self.config.get("predict_feature", False)
           
      def concat_data(self, features):
           return torch.concat([torch.from_numpy(np.expand_dims(feature, 0).astype(np.float32)) if feature.ndim == 2 else torch.from_numpy(feature.astype(np.float32)).permute(2, 0, 1) for feature in features], dim=0)
@@ -140,17 +147,20 @@ class ToTensor(object):
                     data[f"{scale}_classes"] = self.concat_data(data[f"{scale}_classes"])
 
                # label
-               data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
-               # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area # after: 0: no data, 1: aoi, 2: flood
-               if self.config.get("flood_trace_label", True):
-                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # convert flood trace and flooded to "flood"
+               if not self.predict_feature:
+                    data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.int64))
+                    # originally: 0: no data, 1: aoi, 2: flood trace, 3: flooded area # after: 0: no data, 1: aoi, 2: flood
+                    if self.config.get("flood_trace_label", True):
+                         data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2 # convert flood trace and flooded to "flood"
+                    else:
+                         data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to "aoi" (non-flood)
+                         data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2
+                    # if using dice loss, convert the label to binary
+                    if self.config.get("loss_function", "cross entropy").lower()=="dice":
+                         data[f"{scale}_label"][data[f"{scale}_label"]==1] = 0
+                         data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1
                else:
-                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1 # convert flood trace to "aoi" (non-flood)
-                    data[f"{scale}_label"][data[f"{scale}_label"]==3] = 2
-               # if using dice loss, convert the label to binary
-               if self.config.get("loss_function", "cross entropy").lower()=="dice":
-                    data[f"{scale}_label"][data[f"{scale}_label"]==1] = 0
-                    data[f"{scale}_label"][data[f"{scale}_label"]==2] = 1
+                    data[f"{scale}_label"] = torch.from_numpy(data[f"{scale}_label"].astype(np.float32))
 
                # convert label to a classification value
                if self.config.get("classification_threshold", False):
@@ -172,7 +182,8 @@ class HorizontalFlip(object):
           # randomly flip the patches during training
           if self.training and self.subset=="train" and random.choice([True, False]):
                for key in data:
-                    data[key] = torch.flip(data[key], dims=[-1])
+                    if "metadata" not in key:
+                         data[key] = torch.flip(data[key], dims=[-1])
           return data
 
 class Normalize(object):
@@ -180,15 +191,24 @@ class Normalize(object):
 
           self.config = config
           self.scales = self.config["scales"]
+          self.predict_feature = self.config.get("predict_feature", False)
+
+          # import the metadata with the predefined shift and scale factors for each feature
+          self.relative_dem = self.config.get("use_relative_dem", False)
+          if self.relative_dem:
+               with open(f"{data_folder}/metadata/dem_subevents.json") as file:
+                    self.dem_subevents = json.load(file)
+               with open(f"{data_folder}/metadata/zscore_with_dem.json") as file:
+                    self.zscore = json.load(file)
+          else:
+               with open(f"{data_folder}/metadata/zscore.json") as file:
+                    self.zscore = json.load(file)
+
           self.class_features = utils.get_class_features()
           self.non_transformed_features = utils.get_non_transformed_features()
 
           self.non_class_features = {scale: [feature for feature in self.config[f"{scale}_features"] if feature not in self.class_features] for scale in self.scales}
           self.features_to_transform = {scale: [feature for feature in self.non_class_features[scale] if feature not in self.non_transformed_features] for scale in self.scales}
-
-          # import the metadata with the predefined shift and scale factors for each feature
-          with open(f"{data_folder}/metadata/zscore.json") as file:
-               self.zscore = json.load(file)
 
           # for each of the features selected for the model, create a tensor containing of the shift and scale factors for all of its bands
           self.zscore_values = {}
@@ -206,8 +226,8 @@ class Normalize(object):
                     number_channels = len(self.feature_indices[feature_name])
                     self.feature_channels[scale][feature_name] = slice(open_slice, open_slice + number_channels)
                     open_slice += number_channels
-               
-     def apply_normalization(self, scale, feature_name, feature):
+
+     def apply_normalization(self, scale, feature_name, feature, subevent):
 
           # these features do not need to be scaled
           if feature_name in self.non_transformed_features:
@@ -215,6 +235,9 @@ class Normalize(object):
           
           # apply log to features that need to be transformed
           if feature_name == "dem":
+               if self.relative_dem:
+                    if subevent in self.dem_subevents:
+                         feature += self.dem_subevents[subevent]
                feature = torch.log(torch.clamp(feature, min=-199, max=None) + 200)
           elif feature_name == "sentinel2":
                feature += 2
@@ -231,7 +254,10 @@ class Normalize(object):
           for scale in self.scales:
                for feature_name in self.non_class_features[scale]:
                     channels = self.feature_channels[scale][feature_name]
-                    data[f"{scale}_features"][channels] = self.apply_normalization(scale, feature_name, data[f"{scale}_features"][channels])
+                    data[f"{scale}_features"][channels] = self.apply_normalization(scale, feature_name, data[f"{scale}_features"][channels], data["metadata"])
+
+               if self.predict_feature:
+                    data[f"{scale}_label"] = self.apply_normalization(scale, self.predict_feature, data[f"{scale}_label"], data["metadata"])
 
           return data
 
@@ -348,7 +374,11 @@ def normalize(data_folder=os.environ["DATA_FOLDER"]):
 
                # apply log to features that need to be transformed
                if feature == "dem":
-                    raster = np.log(raster + 200)
+                    with open(f"{data_folder}/metadata/dem_subevents.json") as file:
+                         dem_subevents = json.load(file)
+                    if path.split("/")[-1][:-4] in dem_subevents:
+                         raster += dem_subevents[path.split("/")[-1][:-4]]
+                    raster = torch.log(raster + 200)
                elif feature == "sentinel2":
                     raster = raster + 2
                     if band == 0 or band == 1 or band == 2 or band == 9:

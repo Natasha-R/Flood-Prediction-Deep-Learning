@@ -1,0 +1,25 @@
+architecture: "BasicUNet"
+kernel_size: 5
+only_pred_local: True
+
+local_features: ["dem"]
+context_features: ["dem"]
+exclude_scales: ["local"]
+no_residuals: False
+use_consistent_context: False
+
+predict_feature: "dem"
+loss_function: "mse"
+ 
+use_scheduler: False
+number_epochs: 100
+learning_rate: 0.0001
+dropout: 0.1
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 100
+compute_metrics_on_epoch: 0
+
+data_subset_file: "only_patches_data_subset"

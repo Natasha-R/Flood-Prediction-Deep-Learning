@@ -41,12 +41,14 @@ class DownConv(nn.Module):
         return x, before_pool
     
 class UpConv(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout=0, num_scales=1, up_mode="transpose", kernel_size=3):
+    def __init__(self, in_channels, out_channels, dropout=0, num_scales=1, up_mode="transpose", kernel_size=3, add_residuals=True):
         super(UpConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.up_mode = up_mode
         self.dropout_rate = dropout
+        self.add_residuals = add_residuals
+        num_scales = 0 if not self.add_residuals else num_scales
         self.upconv = upconv2x2(self.in_channels, self.out_channels, mode=self.up_mode)
         self.conv1 = conv3x3((num_scales+1)*self.out_channels, self.out_channels, kernel_size=kernel_size)
         self.conv2 = conv3x3(self.out_channels, self.out_channels, kernel_size=kernel_size)
@@ -54,7 +56,7 @@ class UpConv(nn.Module):
             self.dropout = nn.Dropout2d(self.dropout_rate)
     def forward(self, from_down, from_up):
         from_up = self.upconv(from_up)
-        x = torch.cat((from_up, from_down), 1)
+        x = torch.cat((from_up, from_down), 1) if self.add_residuals else from_up
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         if self.dropout_rate > 0:
@@ -122,7 +124,8 @@ class BasicUNet(nn.Module):
         self.scales = config["scales"]
         if config.get("exclude_scales", False):
             self.scales = [scale for scale in self.scales if scale not in config["exclude_scales"]]
-        self.num_classes = config["num_classes"]
+        self.add_residuals = not config.get("no_residuals", False)
+        self.num_classes = config["num_classes"] if not config.get("predict_feature", False) else len(utils.get_indices_per_feature()[config["predict_feature"]])
         self.kernel_size = config.get("kernel_size", 3)
         self.only_pred_local = config.get("only_pred_local", True)
         self.in_channels = sum([utils.find_num_channels(config, scale, embeddings=True) for scale in self.scales])
@@ -145,7 +148,7 @@ class BasicUNet(nn.Module):
         for i in range(depth-1):
             ins = outs
             outs = ins // 2
-            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size)
+            up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size, add_residuals=self.add_residuals)
             self.up_convs.append(up_conv)
         self.local_final = conv1x1(outs, self.num_classes)
         if ("nearby" in self.scales) and (not self.only_pred_local):

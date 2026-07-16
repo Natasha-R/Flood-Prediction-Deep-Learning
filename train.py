@@ -41,6 +41,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
         data_loaders = {subset: data_pipeline.create_data_loader(config, data_folder, ddp, subset, training=True) for subset in subsets}
         if config.get("loss_function", "cross entropy").lower()=="dice":
             loss_function = DiceLoss(mode="binary", from_logits=True, ignore_index=0)
+        elif config.get("predict_feature", False):
+            loss_function = torch.nn.L1Loss() if config.get("loss_function", "l1") == "l1" else torch.nn.MSELoss()
         else:
             loss_function = torch.nn.CrossEntropyLoss(weight=torch.tensor(config["class_weights"], dtype=torch.float32).to(rank), reduction="mean", ignore_index=0, size_average=True)
         optimizer = torch.optim.AdamW(params=model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
@@ -67,13 +69,14 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
             for data in tqdm(data_loaders["train"], desc="Training", leave=False):
                 optimizer.zero_grad()
                 for item in data.keys():
-                    data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
+                    if "metadata" not in item:
+                        data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
                 model_output = model(data)#BclassesHW
 
                 loss = 0.0
                 local_losses = 0.0
                 for scale in output_scales:
-                    indiv_loss = loss_function(model_output[f"{scale}_pred"].squeeze(), data[f"{scale}_label"])
+                    indiv_loss = loss_function(squeeze(config, model_output[f"{scale}_pred"]), data[f"{scale}_label"])
                     loss = loss + config.get(f"{scale}_loss_weight", 1) * indiv_loss
                     if scale == "local":
                         local_losses += indiv_loss.item()
@@ -90,12 +93,13 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
                     for validation_loader in [val_set for val_set in subsets if "val" in val_set]:
                         for data in tqdm(data_loaders[validation_loader], desc=f"Validation ({validation_loader}) loss", leave=False):
                             for item in data.keys():
-                                data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
+                                if "metadata" not in item:
+                                    data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
                             model_output = model(data)
                             loss = 0.0
                             local_losses = 0.0
                             for scale in output_scales:
-                                indiv_loss = loss_function(model_output[f"{scale}_pred"], data[f"{scale}_label"])
+                                indiv_loss = loss_function(squeeze(config, model_output[f"{scale}_pred"]), data[f"{scale}_label"])
                                 loss = loss + config[f"{scale}_loss_weight"] * indiv_loss
                                 if scale == "local":
                                     local_losses += indiv_loss.item()
@@ -128,6 +132,11 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
     finally:
         if ddp:
             cleanup()
+
+def squeeze(config, x):
+    if not config.get("predict_feature", False):
+        return x.squeeze()
+    return x
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the model.")
