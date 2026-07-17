@@ -108,7 +108,7 @@ class CrossScaleAttention(nn.Module):
         key = self.key_conv(torch.cat([key, self.positional_encoding.expand(B, 2, H, W)], dim=1))
         query = query.flatten(2).transpose(1, 2).contiguous()
         key = key.flatten(2).transpose(1, 2).contiguous()
-        attended, _ = self.cross_attention(query=query, key=key, value=key)
+        attended, _ = self.cross_attention(query=query, key=key, value=key, need_weights=False)
         attended = query + attended
         attended = self.norm(attended)
         attended = attended.transpose(1, 2).contiguous().reshape(B, C, H, W)
@@ -131,7 +131,7 @@ class BasicUNet(nn.Module):
         self.in_channels = sum([utils.find_num_channels(config, scale, embeddings=True) for scale in self.scales])
         self.dropout = config["dropout"]
         self.start_filts = start_filts
-        self.depth = config.get("depth", 5)
+        self.depth = config.get("depth", depth)
         
         self.scales_with_class = {scale: sum(True for feature in config[f"{scale}_features"] if feature in utils.get_class_features()) for scale in self.scales}
         embedding_config = config.copy()
@@ -139,13 +139,13 @@ class BasicUNet(nn.Module):
         self.num_class_feats, self.embedding = create_embeddings(embedding_config, "all")
         self.down_convs = []
         self.up_convs = []
-        for i in range(depth):
+        for i in range(self.depth):
             ins = self.in_channels if i == 0 else outs
             outs = self.start_filts*(2**i)
-            pooling = True if i < depth-1 else False
+            pooling = True if i < self.depth-1 else False
             down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.down_convs.append(down_conv)
-        for i in range(depth-1):
+        for i in range(self.depth-1):
             ins = outs
             outs = ins // 2
             up_conv = UpConv(ins, outs, up_mode=up_mode, dropout=self.dropout, kernel_size=self.kernel_size, add_residuals=self.add_residuals)
@@ -202,26 +202,26 @@ class BranchedUNet(nn.Module):
         self.kernel_size = config.get("kernel_size", 3)
         self.dropout = config["dropout"]
         self.num_classes = config["num_classes"]
-        self.depth = config.get("depth", 5)
+        self.depth = config.get("depth", depth)
         self.scales = config["scales"]
         self.in_channels = {scale: utils.find_num_channels(config, scale, embeddings=True) for scale in config["scales"]}
         self.start_filts = start_filts
-        bottleneck_channels = start_filts * (2 ** (depth - 1))
+        bottleneck_channels = start_filts * (2 ** (self.depth - 1))
         
         # set up basin encoder and decoder
         if "basin" in self.scales:
             self.basin_num_class_feats, self.basin_embedding = create_embeddings(config, "basin")
             self.basin_down_convs = []
-            for i in range(depth):
+            for i in range(self.depth):
                 ins = self.in_channels["basin"] if i == 0 else outs
                 outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
+                pooling = True if i < self.depth-1 else False
                 down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.basin_down_convs.append(down_conv)
             self.basin_weight = config.get("basin_feat_weight", 1)
             if not self.only_pred_local:
                 self.basin_up_convs = []
-                for i in range(depth-1):
+                for i in range(self.depth-1):
                     ins = outs
                     outs = ins // 2
                     up_conv = UpConv(ins, outs, dropout=self.dropout, kernel_size=self.kernel_size)
@@ -234,17 +234,17 @@ class BranchedUNet(nn.Module):
         if "context" in self.scales:
             self.context_num_class_feats, self.context_embedding = create_embeddings(config, "context")
             self.context_down_convs = []
-            for i in range(depth):
+            for i in range(self.depth):
                 ins = self.in_channels["context"] if i == 0 else outs
                 outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
+                pooling = True if i < self.depth-1 else False
                 down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.context_down_convs.append(down_conv)
             self.context_down_convs = nn.ModuleList(self.context_down_convs)
             self.context_weight = config.get("context_feat_weight", 1)
             if not self.only_pred_local:
                 self.context_up_convs = []
-                for i in range(depth-1):
+                for i in range(self.depth-1):
                     ins = outs
                     outs = ins // 2
                     up_conv = UpConv(ins, outs, num_scales=2 if ("basin" in self.scales) and (self.residuals_all_scales) else 1, dropout=self.dropout, kernel_size=self.kernel_size)
@@ -258,10 +258,10 @@ class BranchedUNet(nn.Module):
         if "nearby" in self.scales:
             self.nearby_num_class_feats, self.nearby_embedding = create_embeddings(config, "nearby")
             self.nearby_down_convs = []
-            for i in range(depth):
+            for i in range(self.depth):
                 ins = self.in_channels["nearby"] if i == 0 else outs
                 outs = self.start_filts*(2**i)
-                pooling = True if i < depth-1 else False
+                pooling = True if i < self.depth-1 else False
                 down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
                 self.nearby_down_convs.append(down_conv)
             self.nearby_down_convs = nn.ModuleList(self.nearby_down_convs)
@@ -269,7 +269,7 @@ class BranchedUNet(nn.Module):
             num_other_scales = len(self.scales)-2
             if not self.only_pred_local:
                 self.nearby_up_convs = []
-                for i in range(depth-1):
+                for i in range(self.depth-1):
                     ins = outs
                     outs = ins // 2
                     up_conv = UpConv(ins, outs, num_scales = 1 + num_other_scales if self.residuals_all_scales else 1, dropout=self.dropout, kernel_size=self.kernel_size)
@@ -277,19 +277,19 @@ class BranchedUNet(nn.Module):
                 self.nearby_up_convs = nn.ModuleList(self.nearby_up_convs)
                 self.nearby_final = conv1x1(outs, self.num_classes) #BclassesHW
             if ("context" in self.scales) or ("basin" in self.scales):
-                self.nearby_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+                self.nearby_attends_higher = CrossScaleAttention(config, bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
                 
         self.local_down_convs = []
         self.local_up_convs = []
         self.local_num_class_feats, self.local_embedding = create_embeddings(config, "local")
         self.local_weight = config.get("local_feat_weight", 1)
-        for i in range(depth):
+        for i in range(self.depth):
             ins = self.in_channels["local"] if i == 0 else outs
             outs = self.start_filts*(2**i)
-            pooling = True if i < depth-1 else False
+            pooling = True if i < self.depth-1 else False
             down_conv = DownConv(ins, outs, pooling=pooling, dropout=self.dropout, kernel_size=self.kernel_size)
             self.local_down_convs.append(down_conv)
-        for i in range(depth-1):
+        for i in range(self.depth-1):
             ins = outs
             outs = ins // 2
             up_conv = UpConv(ins, outs, num_scales=len(self.scales) if self.residuals_all_scales else 1, dropout=self.dropout, kernel_size=self.kernel_size)
@@ -297,7 +297,7 @@ class BranchedUNet(nn.Module):
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.local_up_convs = nn.ModuleList(self.local_up_convs)
         self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
-        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
 
     def forward(self, data):
 
