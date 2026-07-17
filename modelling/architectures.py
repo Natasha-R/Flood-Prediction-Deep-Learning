@@ -81,7 +81,7 @@ class ConvFusion(nn.Module):
         return self.fusion(torch.cat([feature_map_1, feature_map_2], dim=1))
 
 class CrossScaleAttention(nn.Module):
-    def __init__(self, config, embed_dim=512, num_heads=8, depth=5):
+    def __init__(self, config, query_scale, key_scale, embed_dim=512, num_heads=8, depth=5):
         super().__init__()
 
         self.cross_attention = nn.MultiheadAttention(embed_dim=embed_dim,
@@ -91,29 +91,36 @@ class CrossScaleAttention(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.conv = nn.Conv2d(embed_dim, embed_dim, 1)
         self.relu = nn.ReLU()
-        
         size = int(256/(2**(depth-1)))
-        x_encoding = torch.linspace(-1, 1, size)
-        y_encoding = torch.linspace(-1, 1, size)
-        x_encoding = x_encoding.view(1, 1, 1, size).expand(1, 1, size, size)
-        y_encoding = y_encoding.view(1, 1, size, 1).expand(1, 1, size, size)
-        self.register_buffer("positional_encoding", torch.cat([x_encoding, y_encoding], dim=1), persistent=True)
+        self.resolutions = {"local": 10, "nearby": 25, "context": 100, "basin": 1000}
+        largest_resolution = max([self.resolutions[scale] for scale in config["scales"]])
+        
+        q_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
+        q_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
+        q_x_encoding = q_x_encoding.view(1, 1, 1, size).expand(1, 1, size, size)
+        q_y_encoding = q_y_encoding.view(1, 1, size, 1).expand(1, 1, size, size)
+        self.register_buffer("query_positional_encoding", torch.cat([q_x_encoding, q_y_encoding], dim=1), persistent=True)
 
-        self.query_conv = nn.Conv2d(embed_dim + 2, embed_dim, 1)
-        self.key_conv = nn.Conv2d(embed_dim + 2, embed_dim, 1)
+        k_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
+        k_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
+        k_x_encoding = k_x_encoding.view(1, 1, 1, size).expand(1, 1, size, size)
+        k_y_encoding = k_y_encoding.view(1, 1, size, 1).expand(1, 1, size, size)
+        self.register_buffer("key_positional_encoding", torch.cat([k_x_encoding, k_y_encoding], dim=1), persistent=True)
+
+        self.query_conv = nn.Conv2d(embed_dim, embed_dim, 1)
+        self.key_conv = nn.Conv2d(embed_dim, embed_dim, 1)
+        self.encoding_conv = nn.Conv2d(2, embed_dim, 1, bias=False)
 
     def forward(self, query, key):
+        
         B, C, H, W = query.shape
-        query = self.query_conv(torch.cat([query, self.positional_encoding.expand(B, 2, H, W)], dim=1))
-        key = self.key_conv(torch.cat([key, self.positional_encoding.expand(B, 2, H, W)], dim=1))
-        query = query.flatten(2).transpose(1, 2).contiguous()
-        key = key.flatten(2).transpose(1, 2).contiguous()
-        attended, _ = self.cross_attention(query=query, key=key, value=key, need_weights=False)
-        attended = query + attended
-        attended = self.norm(attended)
-        attended = attended.transpose(1, 2).contiguous().reshape(B, C, H, W)
-        attended = self.conv(attended)
-        attended = self.relu(attended)
+        embed_query = (self.query_conv(query) + self.encoding_conv(self.query_positional_encoding.expand(B, 2, H, W))).flatten(2).transpose(1, 2).contiguous()
+        embed_key = (self.key_conv(key) + self.encoding_conv(self.key_positional_encoding.expand(B, 2, H, W))).flatten(2).transpose(1, 2).contiguous()
+
+        attended, _ = self.cross_attention(query=embed_query, key=embed_key, value=embed_key, need_weights=False)
+
+        attended = self.relu(self.conv((self.norm(self.query_conv(query).flatten(2).transpose(1, 2).contiguous() + attended)).transpose(1, 2).contiguous().reshape(B, C, H, W)))
+
         return attended
 
 class BasicUNet(nn.Module):
@@ -252,7 +259,7 @@ class BranchedUNet(nn.Module):
                 self.context_up_convs = nn.ModuleList(self.context_up_convs)
                 self.context_final = conv1x1(outs, self.num_classes) #BclassesHW
             if "basin" in self.scales:
-                self.context_attends_higher = CrossScaleAttention(config, bottleneck_channels) if self.use_attention else ConvFusion(bottleneck_channels)
+                self.context_attends_higher = CrossScaleAttention(config, query_scale="context", key_scale="basin", embed_dim=bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
 
         # set up nearby encoder and decoder
         if "nearby" in self.scales:
@@ -277,7 +284,7 @@ class BranchedUNet(nn.Module):
                 self.nearby_up_convs = nn.ModuleList(self.nearby_up_convs)
                 self.nearby_final = conv1x1(outs, self.num_classes) #BclassesHW
             if ("context" in self.scales) or ("basin" in self.scales):
-                self.nearby_attends_higher = CrossScaleAttention(config, bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
+                self.nearby_attends_higher = CrossScaleAttention(config, query_scale="nearby", key_scale=self.scales[2], embed_dim=bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
                 
         self.local_down_convs = []
         self.local_up_convs = []
@@ -297,7 +304,7 @@ class BranchedUNet(nn.Module):
         self.local_down_convs = nn.ModuleList(self.local_down_convs)
         self.local_up_convs = nn.ModuleList(self.local_up_convs)
         self.local_final = conv1x1(outs, self.num_classes) #BclassesHW
-        self.local_attends_higher = CrossScaleAttention(config, bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
+        self.local_attends_higher = CrossScaleAttention(config, query_scale="local", key_scale=self.scales[1], embed_dim=bottleneck_channels, depth=self.depth) if self.use_attention else ConvFusion(bottleneck_channels)
 
     def forward(self, data):
 
@@ -597,7 +604,7 @@ class BranchedResNet(nn.Module):
             self.context_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="context")     
             self.context_final = nn.Linear(512, 3)
             if "basin" in self.scales:
-                self.context_attends_higher = CrossScaleAttention(config, depth=6)
+                self.context_attends_higher = CrossScaleAttention(config, query_scale="context", key_scale="basin", depth=6)
 
         if "nearby" in self.scales:
             self.nearby_num_class_feats, self.nearby_embedding = create_embeddings(config, "nearby")
@@ -614,7 +621,7 @@ class BranchedResNet(nn.Module):
             self.nearby_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="nearby")     
             self.nearby_final = nn.Linear(512, 3)
             if ("basin" in self.scales) or ("context" in self.scales):
-                self.nearby_attends_higher = CrossScaleAttention(config, depth=6)
+                self.nearby_attends_higher = CrossScaleAttention(config, query_scale="nearby", key_scale=self.scales[2], depth=6)
 
         self.local_num_class_feats, self.local_embedding = create_embeddings(config, "local")
         self.local_weight = config.get("local_feat_weight", 1)
@@ -629,7 +636,7 @@ class BranchedResNet(nn.Module):
         self.local_layer3 = self.make_layer(ClassificationBlock, 256, 2, stride=2, scale="local")   # 256 x 16 x 16
         self.local_layer4 = self.make_layer(ClassificationBlock, 512, 2, stride=2, scale="local")   # 512 x 8 x 8  
         self.local_final = nn.Linear(512, 3)
-        self.local_attends_higher = CrossScaleAttention(config, depth=6)
+        self.local_attends_higher = CrossScaleAttention(config, query_scale="local", key_scale=self.scales[1], depth=6)
 
         if ("nearby" in self.scales) and (not self.only_pred_local):
             self.nearby_final = nn.Linear(512, 3)
