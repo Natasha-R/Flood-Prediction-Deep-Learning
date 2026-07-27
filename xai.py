@@ -16,6 +16,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--mask_all_features', action="store_true", default=False, help="Consecutively mask all of the features at all of the scales.")
     parser.add_argument('--mask_local_features', type=str, default=None, help="Mask these local scale features.")
+    parser.add_argument('--mask_nearby_features', type=str, default=None, help="Mask these nearby scale features.")
     parser.add_argument('--mask_context_features', type=str, default=None, help="Mask these context scale features.")
     parser.add_argument('--mask_basin_features', type=str, default=None, help="Mask these basin scale features.")
     parser.add_argument('--permute', action="store_true", default=False, help="Use permute by shuffling instead of zero-out the feature/patch.")
@@ -67,7 +68,6 @@ if __name__ == "__main__":
         seg_grad_cam(config=config, config_name=new_config_name, data_folder=args.data_folder, modelling_folder=args.modelling_folder, model=model, device=args.gpu, method=args.grad_cam_method,
                      patch=args.patch, target_map=args.feature_map_scale, target_pred=args.prediction_scale, box_top_left=args.box_top_left, box_bottom_right=args.box_bottom_right, class_of_interest=args.class_of_interest)
     
-
     if args.mask_box:
         mask_patch = {"scale": args.scale, 
                     "top_left":args.box_top_left.replace(" ", "").split(","),
@@ -85,8 +85,8 @@ if __name__ == "__main__":
                                 device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
                                 classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
 
-    elif args.mask_local_features or args.mask_context_features or args.mask_basin_features:
-        for scale, scale_mask_features in zip(["local", "context", "basin"], [args.mask_local_features, args.mask_context_features, args.mask_basin_features]):
+    elif args.mask_local_features or args.mask_nearby_features or args.mask_context_features or args.mask_basin_features:
+        for scale, scale_mask_features in zip(["local", "nearby", "context", "basin"], [args.mask_local_features, args.mask_nearby_features, args.mask_context_features, args.mask_basin_features]):
             if scale_mask_features: mask_features[scale] = scale_mask_features.replace(" ", "").split(",")
         config["masked_features"] = utils.mask_to_string(mask_features)
         new_config_name = config_name + "_" + utils.mask_to_string(mask_features)
