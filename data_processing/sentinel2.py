@@ -43,7 +43,7 @@ def find_sentinel2_availability(data_folder, scale):
     # import the metadata
     if scale == "local":
         aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    else: # if scale == "context" or scale == "basin":
+    else:
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(wkt.loads)
         aois["event"] = aois["subevent"].str.split("_").str[0]
@@ -92,7 +92,7 @@ def find_minimal_cloud_cover(data_folder, scale):
     # import the metadata
     if scale == "local":
         aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
-    else: # if scale == "context" or scale == "basin":
+    else:
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(wkt.loads)
         aois["event"] = aois["subevent"].str.split("_").str[0]
@@ -186,7 +186,7 @@ def download_sentinel2(data_folder, scale):
     aois["availability_date"] = aois["availability_date"].dt.date
     if scale == "local":
         sentinel2_folder = f"{data_folder}/full_subevent/sentinel_2/"
-    else: # if scale == "context" or scale == "basin":
+    else:
         sentinel2_folder = f"{data_folder}/{scale}/download_sentinel2/"
     if not os.path.isdir(sentinel2_folder):
         os.mkdir(sentinel2_folder)
@@ -226,7 +226,7 @@ def download_sentinel2(data_folder, scale):
                     geometry_correctly_sized = True
 
             # extract the sentinel 2 bands and save as a GeoTiff in UINT16
-            for bbox in split_aois:
+            for bbox in tqdm(split_aois):
                 bbox_size = bbox_to_dimensions(bbox, resolution=resolution)
                 request = SentinelHubRequest(
                     evalscript="""
@@ -292,7 +292,7 @@ def create_sentinel2_rasters(data_folder, scale):
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
         sentinel2_raster_folder = f"{data_folder}/full_subevent/raster_sentinel2/"
         download_s2_folder = f"{data_folder}/full_subevent/sentinel_2"
-    else: # if scale == "context" or scale == "basin":
+    else:
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(wkt.loads)
         aoi_avail["aoi_date"] = aoi_avail["date"]
@@ -316,7 +316,7 @@ def create_sentinel2_rasters(data_folder, scale):
         if scale == "local":
             aoi_ids = list(aois[aois["subevent"]==subevent]["geometry_event_date_id"])
             raster_id = subevent
-        else: # if scale == "context" or scale == "basin":
+        else:
             aoi_ids = [raster_extents.loc[index, "geometry_event_date_id"]]
             raster_id = raster_extents["patch"].iloc[index][:-4]
 
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("--find_minimal_cloud_cover", action="store_true", default=False, help="From the available Sentinel 2 data, find the data with the minimum cloud cover.")
     parser.add_argument("--download_sentinel2", action="store_true", default=False, help="Download the Sentinel 2 data for each of the AOIs.")
     parser.add_argument("--create_sentinel2_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 2 data, matching to the CEMS labels.")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

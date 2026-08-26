@@ -67,7 +67,7 @@ def create_soil_moisture_rasters(data_folder, global_folder, scale):
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
         soil_moisture_folders = [f"{data_folder}/full_subevent/raster_soil_moisture_one_day/",
                                 f"{data_folder}/full_subevent/raster_soil_moisture_one_week/"]
-    else: # if scale == "context" or scale == "basin"
+    else:
         raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         soil_moisture_folders = [f"{data_folder}/{scale}/soil_moisture_one_day/",
@@ -81,7 +81,8 @@ def create_soil_moisture_rasters(data_folder, global_folder, scale):
     for index in tqdm(range(len(raster_extents)), desc=f"Create soil moisture rasters for {scale} scale"):
 
         # extract data for both one day previous to the subevent, and one week before
-        for time_frame in ["one_day", "one_week"]:
+        #for time_frame in ["one_day", "one_week"]:
+        for time_frame in ["one_week"]:
             
             # extract out the metadata for the subevent raster
             date = raster_extents[time_frame].dt.date[index]
@@ -95,7 +96,7 @@ def create_soil_moisture_rasters(data_folder, global_folder, scale):
                 with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
                     reference_label = reference_file.read(1)
                 save_path = f"{data_folder}/full_subevent/raster_soil_moisture_{time_frame}/{subevent}"
-            else:  # if scale == "context" or scale == "basin"
+            else:
                 patch_name = raster_extents["patch"].iloc[index][:-4]
                 save_path = f"{data_folder}/{scale}/soil_moisture_{time_frame}/{patch_name}"
 
@@ -146,7 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_soil_moisture_data", action="store_true", default=False, help="Download the global soil moisture data.")
     parser.add_argument("--create_soil_moisture_rasters", action="store_true", default=False, help="Create raster files of the soil moisture data, matching to the CEMS labels.")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

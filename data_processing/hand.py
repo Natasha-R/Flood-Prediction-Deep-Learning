@@ -17,7 +17,7 @@ def create_hand_rasters(data_folder, global_folder, scale):
     if scale == "local":
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
         hand_folder = f"{data_folder}/full_subevent/raster_hand"
-    else: # if scale == "context" or scale == "basin"
+    else:
         raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         hand_folder = f"{data_folder}/{scale}/hand"
@@ -36,7 +36,7 @@ def create_hand_rasters(data_folder, global_folder, scale):
 
         if scale == "local":
             hand_path = f"{hand_folder}/{subevent}.tif"
-        else: # if scale == "context" or scale == "basin"
+        else:
             patch = raster_extents["patch"].iloc[index]
             hand_path = f"{hand_folder}/{patch}"
         if os.path.exists(hand_path):
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create HAND rasters.")
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the global data folder.")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
     args = parser.parse_args()
 
     create_hand_rasters(args.data_folder, args.global_folder, args.scale)

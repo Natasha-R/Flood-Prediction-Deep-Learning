@@ -101,7 +101,7 @@ def create_raster_metadata(data_folder):
 
 def find_wider_scale_bounds(data_folder, global_folder):
     """
-    Find the boundaries of the wider scales (nearby, context and basin) from the local patch bounds.
+    Find the boundaries of the wider scales from the local patch bounds.
     The "context" scale corresponds to the level 12 basin, and the "basin" scale corresponds to the level 6 basin.
     The "consistent context (con_context)" is 100 metre resolution, and the nearby context 25 metre resolution.
     """
@@ -115,7 +115,7 @@ def find_wider_scale_bounds(data_folder, global_folder):
     all_patches.sort()
     scales = {"patch":[], "basin_geometry":[], "context_geometry":[], "patch_geometry":[]}
 
-    for patch in tqdm(all_patches, desc="Find context and basin scale boundaries"):
+    for patch in tqdm(all_patches, desc="Find wider scale boundaries"):
 
         # find the boundaries and the centre of each local 256x256 patch
         with rasterio.open(f"{data_folder}/local/label/" + patch) as file:

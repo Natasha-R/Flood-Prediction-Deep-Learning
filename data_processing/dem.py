@@ -102,7 +102,7 @@ def create_dem_rasters(data_folder):
 
 def create_dem_scales(data_folder, global_folder, scale):
     """
-    Create patches of the DEM data at the context and basin scales.
+    Create patches of the DEM data at the wider scales.
     """
 
     # define the metadata and the folder locations
@@ -193,9 +193,9 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--extract_dem_aoi", action="store_true", default=False, help="Extract the DEM for each of the AOIs from the FABDEM files.")
     parser.add_argument("--create_dem_rasters", action="store_true", default=False, help="Create raster files for the DEM, matching to the CEMS labels.")
-    parser.add_argument("--create_dem_scales", action="store_true", default=False, help="Create patches of the DEM data at the context and basin scales.")
+    parser.add_argument("--create_dem_scales", action="store_true", default=False, help="Create patches of the DEM data at the wider scales.")
     parser.add_argument("--create_slope", action="store_true", default=False, help="Create patches for the slope.")
-    parser.add_argument("--scale", default="context", help="The scale at which to create raster files.")
+    parser.add_argument("--scale", default="nearby", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

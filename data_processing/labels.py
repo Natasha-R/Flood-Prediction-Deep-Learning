@@ -224,7 +224,7 @@ def combine_cems_and_permanent_water(data_folder):
 
 def create_label_scales(data_folder, scale):
     """
-    Create patches of the labels at the context and basin scales.
+    Create patches of the labels at the wider scales.
     """
 
     # define the metadata and folder locations
@@ -249,8 +249,8 @@ if __name__ == "__main__":
     parser.add_argument("--create_cems_geojson", action="store_true", default=False, help="Create the GeoJSON files.")
     parser.add_argument("--create_cems_raster", action="store_true", default=False, help="Create the rasters from the GeoJSON files.")
     parser.add_argument("--combine_cems_and_permanent_water", default=False, help="Combine the permanent water and CEMS data to create the labels.")
-    parser.add_argument("--create_label_scales", action="store_true", default=False, help="Create patches of the labels at the context and basin scales.")
-    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: context or basin.")
+    parser.add_argument("--create_label_scales", action="store_true", default=False, help="Create patches of the labels at the wider scales.")
+    parser.add_argument("--scale", default="nearby", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

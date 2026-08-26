@@ -38,7 +38,7 @@ def find_sentinel1_availability(data_folder, scale):
     if scale == "local":
         extents = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
         sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
-    else: # if scale == "context" or scale == "basin":
+    else:
         extents = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         extents["geometry"] = extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         extents["aoi_date"] = extents["date"]
@@ -102,7 +102,7 @@ def download_sentinel1(data_folder, scale):
         aois = gpd.read_file(f"{data_folder}/metadata/aoi_extent.geojson")
         sentinel1_folder = f"{data_folder}/full_subevent/sentinel_1/"
         sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
-    else: # if scale == "context" or scale == "basin":
+    else:
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(shapely.wkt.loads)
         aois["aoi_date"] = aois["date"]
@@ -227,7 +227,7 @@ def create_sentinel1_aoi_date_difference(data_folder, scale):
         sentinel1_geojson_folder = f"{data_folder}/full_subevent/geojson_sentinel1/"
         sentinel1_raster_folder = f"{data_folder}/full_subevent/raster_sentinel1/"
         sentinel1_download_folder = f"{data_folder}/full_subevent/sentinel_1/"
-    else: # if scale == "context" or scale == "basin":
+    else:
         aois = gpd.read_file(f"{data_folder}/metadata/scales_aois.geojson")
         aois["geometry"] = aois[f"{scale}_geometry"].apply(shapely.wkt.loads)
         sentinel1_geojson_folder = f"{data_folder}/{scale}/geojson_sentinel1/"
@@ -362,8 +362,8 @@ if __name__ == "__main__":
     parser.add_argument("--download_sentinel1", action="store_true", default=False, help="Download the Sentinel 1 data for each of the AOIs.")
     parser.add_argument("--create_sentinel1_aoi_date_difference", action="store_true", default=False, help="Create a raster for each AOI and add a date difference band to it.")
     parser.add_argument("--create_sentinel1_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data, matching to the CEMS labels.")
-    parser.add_argument("--create_sentinel1_scale_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data at the context and basin scales.")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--create_sentinel1_scale_rasters", action="store_true", default=False, help="Create raster files of the Sentinel 1 data at the wider scales.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

@@ -67,7 +67,7 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
         if scale_name == "local":
             raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
             permanent_water_raster_folder = f"{data_folder}/full_subevent/raster_permanent_water"
-        else: # if scale == "context" or scale == "basin"
+        else:
             raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
             raster_extents["geometry"] = raster_extents[f"{scale_name}_geometry"].apply(shapely.wkt.loads)
             permanent_water_raster_folder = f"{data_folder}/{scale_name}/permanent_water"
@@ -84,7 +84,7 @@ def create_permanent_water_rasters(data_folder, global_folder, scale):
             subevent = raster_extents["subevent"][index]
             if scale_name == "local":
                 save_path = f"{permanent_water_raster_folder}/{subevent}"
-            else: # if scale == "context" or scale == "basin"
+            else:
                 patch_name = raster_extents["patch"].iloc[index]
                 save_path = f"{permanent_water_raster_folder}/{patch_name[:-4]}"
             if os.path.isfile(save_path + ".tif"):
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_global_permanent_water", action="store_true", default=False, help="Download global permanent water data from OSM")
     parser.add_argument("--create_permanent_water_rasters", action="store_true", default=False, help="Create permanent water rasters corresponding to the CEMS labels.")
-    parser.add_argument("--scale", default="context", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="nearby", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

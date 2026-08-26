@@ -18,7 +18,7 @@ def create_flow_accumulation(data_folder, global_folder, scale):
     if scale == "local":
         raster_extents = gpd.read_file(f"{data_folder}/metadata/raster_extent.geojson")
         flow_acc_folder = f"{data_folder}/full_subevent/raster_flow_accumulation"
-    else: # if scale == "context" or scale == "basin"
+    else:
         raster_extents = gpd.read_file(f"{data_folder}/metadata/scales.geojson")
         raster_extents["geometry"] = raster_extents[f"{scale}_geometry"].apply(shapely.wkt.loads)
         flow_acc_folder = f"{data_folder}/{scale}/flow_accumulation"
@@ -37,7 +37,7 @@ def create_flow_accumulation(data_folder, global_folder, scale):
 
         if scale == "local":
             save_path = f"{flow_acc_folder}/{subevent}.tif"
-        else:  # if scale == "context" or scale == "basin"
+        else:
             patch_name = raster_extents["patch"].iloc[index]
             save_path = f"{flow_acc_folder}/{patch_name}"
 
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--data_folder", default=os.environ["DATA_FOLDER"], help="The path to the data folder.")
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 

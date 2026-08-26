@@ -99,10 +99,13 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
     global_precipitation_folder = f"{global_folder}/global_precipitation"
     if not os.path.isdir(precipitation_folder):
         os.mkdir(precipitation_folder)
-    if not os.path.isdir(precipitation_summary_folder):
-        os.mkdir(precipitation_summary_folder)
-    
+    # if not os.path.isdir(precipitation_summary_folder):
+    #     os.mkdir(precipitation_summary_folder)
+
     for index in tqdm(range(len(raster_extents)), f"Create precipitation rasters for {scale} scale"):
+
+        if not raster_extents.loc[index, "subevent"].split("_")[0] in ["EMSR279"]:
+            continue
 
         # extract metadata on the subevent
         date = raster_extents["date"].dt.date[index]
@@ -114,7 +117,7 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
         if scale == "local":
             file_name = f"{precipitation_folder}/{subevent}.tif"
             summary_file_name = f"{precipitation_summary_folder}/{subevent}.tif"
-        else: # if scale == "context" or scale == "basin"
+        else:
             patch = raster_extents["patch"].iloc[index]
             file_name = f"{precipitation_folder}/{patch}"
             summary_file_name = f"{precipitation_summary_folder}/{patch}"
@@ -132,7 +135,7 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
         days_29_42 = [rasterio.open(path) for path in global_precipitation_paths[0:14]]
         
         # aggregate the first 28 days into two 14 days sums
-        sum_days_1_14 = np.sum([file.read(1) for file in days_1_14], axis=0)
+        # sum_days_1_14 = np.sum([file.read(1) for file in days_1_14], axis=0)
         sum_days_15_28 = np.sum([file.read(1) for file in days_15_28], axis=0)
         sum_days_29_42 = np.sum([file.read(1) for file in days_29_42], axis=0)
         
@@ -149,17 +152,17 @@ def create_precipitation_rasters(data_folder, global_folder, scale):
             file.write(sum_days_29_42, 16)
             file.nodata = None
         meta.update({"count": 3})
-        with rasterio.open(summary_file_name, "w", **meta, compress="LZW") as file:
-            file.write(sum_days_1_14, 1)
-            file.write(sum_days_15_28, 2)
-            file.write(sum_days_29_42, 3)
-            file.nodata = None
+        # with rasterio.open(summary_file_name, "w", **meta, compress="LZW") as file:
+        #     file.write(sum_days_1_14, 1)
+        #     file.write(sum_days_15_28, 2)
+        #     file.write(sum_days_29_42, 3)
+        #     file.nodata = None
 
         # import the label raster with aois to match the precipitation raster to
         with rasterio.open(f"{data_folder}/full_subevent/raster_cems/{subevent}.tif") as reference_file:
             reference_label = reference_file.read(1)
 
-        for file, num_of_bands in zip([file_name, summary_file_name], [16, 3]):
+        for file, num_of_bands in zip([file_name], [16]):
 
             # match the precipitation geotiff to the subevent raster's extent
             gdal.Warp(file, file, format='GTiff', creationOptions=["COMPRESS=LZW", "BIGTIFF=YES"],
@@ -205,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--global_folder", default=os.environ["GLOBAL_FOLDER"], help="The path to the folder containing the global data")
     parser.add_argument("--download_precipitation", action="store_true", default=False, help="Download the global precipitation data.")
     parser.add_argument("--create_precipitation_rasters", action="store_true", default=False, help="Create raster files of the precipitation data, matching to the CEMS labels.")
-    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, context, or basin.")
+    parser.add_argument("--scale", default="local", help="The scale at which to create raster files: local, nearby, context, con_context, or basin.")
 
     args = parser.parse_args()
 
