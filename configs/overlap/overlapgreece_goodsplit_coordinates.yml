@@ -1,0 +1,32 @@
+architecture: "BranchedUNet"
+kernel_size: 5
+use_attention: True
+depth: 5
+only_pred_local: True
+residuals_all_scales: True
+crop_scales_residuals: True
+crop_scales_at_bottleneck: False
+local_residual_within_attention: False
+scale_only_bottleneck: True
+hierarchical_attention: False
+
+local_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover", "coordinates"]
+nearby_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover", "coordinates"]
+context_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_day", "soil_class", "land_cover", "coordinates"]
+use_consistent_context: True
+use_relative_dem: False
+flood_trace_label: False
+
+class_weights: [0, 0.550, 1.450]
+use_scheduler: False
+number_epochs: 100
+learning_rate: 0.0001
+dropout: 0.1
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 10
+compute_metrics_on_epoch: 10
+
+data_subset_file: "good_overlap_greece_split"

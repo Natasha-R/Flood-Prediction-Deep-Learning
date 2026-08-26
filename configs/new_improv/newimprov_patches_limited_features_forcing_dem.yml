@@ -1,0 +1,32 @@
+architecture: "BranchedUNet"
+kernel_size: 5
+use_attention: True
+depth: 5
+only_pred_local: True
+residuals_all_scales: True
+crop_scales_residuals: True
+crop_scales_at_bottleneck: False
+local_residual_within_attention: False
+
+scale_only_bottleneck: True
+hierarchical_attention: False
+
+local_features: ["dem", "precipitation", "soil_moisture_one_day"]
+nearby_features: ["dem", "precipitation", "soil_moisture_one_day"]
+context_features: ["dem", "precipitation", "soil_moisture_one_day"]
+use_consistent_context: True
+use_relative_dem: True
+
+class_weights: [0, 0.550, 1.450]
+use_scheduler: False
+number_epochs: 100
+learning_rate: 0.0001
+dropout: 0.1
+weight_decay: 0.0001
+batch_size: 32
+number_workers: 8
+
+save_model_on_epoch: 100
+compute_metrics_on_epoch: 10
+
+data_subset_file: "only_patches_data_subset"
