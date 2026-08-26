@@ -56,6 +56,8 @@ def load_config(config_path, logger=None):
     for scale in config["scales"]:
         if "indices" in config[f"{scale}_features"]:
             config[f"{scale}_features"] = [feature for feature in config[f"{scale}_features"] if feature != "indices"] + ["indices"]
+        if "coordinates" in config[f"{scale}_features"]:
+            config[f"{scale}_features"] = [feature for feature in config[f"{scale}_features"] if feature != "coordinates"] + ["coordinates"]
 
     return config, config_name
 
@@ -95,7 +97,7 @@ def load_model(config, rank, ddp, logger=False, pretrained_path=False):
     # put the model onto the GPU(s)
     org_model = org_model.to(rank)
     if ddp:
-        model = DDP(org_model, device_ids=[rank])
+        model = DDP(org_model, device_ids=[rank], find_unused_parameters=True)
     else:
         model = org_model
     if rank != "cpu":
@@ -120,10 +122,10 @@ def get_indices_per_feature():
     return {feature_name: list(range(index)) for feature_name, index in 
             zip(["dem", "soil_bulk_density", "soil_moisture_one_day", "soil_moisture_one_week", "sentinel2", "precipitation", 
                  "sentinel1", "flow_accumulation", "permanent_water", "flow_direction", "soil_class", "land_cover",
-                 "indices", "summary_precipitation", "soil_vol_water", "slope", "hand"], 
+                 "indices", "summary_precipitation", "soil_vol_water", "slope", "hand", "coordinates"], 
                  [1, 1, 2, 2, 12, 16, 
                   3, 1, 1, 2, 1, 1, 
-                  5, 3, 2, 1, 1])}
+                  5, 3, 2, 1, 1, 2])}
 
 def find_num_channels(config, scale, embeddings=False):
     channels_in_features = {feature: len(indices) for feature, indices in get_indices_per_feature().items()}
@@ -139,10 +141,10 @@ def get_class_feature_classes():
     return {"soil_class":31, "land_cover":12}
 
 def get_derived_features():
-    return ["indices"]
+    return ["indices", "coordinates"]
 
 def get_non_transformed_features():
-    return ["permanent_water", "soil_class", "land_cover", "indices"]
+    return ["permanent_water", "soil_class", "land_cover", "indices", "coordinates"]
 
 def convert_to_classification(pred, label, config):
 

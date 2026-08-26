@@ -11,6 +11,7 @@ from collections import defaultdict
 from torch.utils.data.distributed import DistributedSampler
 import numpy as np
 import random
+import rasterio
 from modelling import utils
 
 def seed_worker(worker_id):
@@ -18,11 +19,11 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None, training=False):
+def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, mask_patch=None, training=False):
      """
      Create a dataloader for a particular data subset, subevent or event.
      """
-     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_patch, training)
+     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_feature_bands, mask_patch, training)
 
      if ddp: 
           loader = torch.utils.data.DataLoader(
@@ -48,7 +49,7 @@ class FloodDataset(torch.utils.data.Dataset):
      """
      The dataset for the flood data.
      """
-     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_patch=None, training=False):
+     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, mask_patch=None, training=False):
           
           self.config = config
           self.data_folder = data_folder
@@ -60,7 +61,7 @@ class FloodDataset(torch.utils.data.Dataset):
           self.features = {scale: [feature for feature in self.config[f"{scale}_features"]] for scale in self.scales}
           self.predict_feature = self.config.get("predict_feature", False)
           self.class_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.class_features]) for scale in self.scales}
-          self.derived_exists = {f"{scale}": any([feature for feature in self.config[f"{scale}_features"] if feature in self.derived_features]) for scale in self.scales}
+          self.pixel_locations = np.arange(256, dtype=np.float32) + 0.5
 
           # subset the data patches based on a particular train/validation split, subevent, or event
           data_subset = pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")
@@ -78,7 +79,7 @@ class FloodDataset(torch.utils.data.Dataset):
 
           self.transform = transforms.Compose([ToTensor(config),
                                                Normalize(config, data_folder),
-                                               MaskFeatures(config, mask_features),
+                                               MaskFeatures(config, mask_features, mask_feature_bands),
                                                MaskPatch(config, mask_patch),
                                                HorizontalFlip(training, subset)])
 
@@ -93,6 +94,12 @@ class FloodDataset(torch.utils.data.Dataset):
           cloud_time = sentinel2[:, :, 10:]
           return np.concatenate([np.expand_dims(ndvi, 2), np.expand_dims(ndmi, 2), np.expand_dims(ndwi, 2), cloud_time], axis=2)
 
+     def calculate_coords(self, index, scale):
+          with rasterio.open(f"{self.data_folder}/{scale}/label/{self.patches[index]}") as src:
+               transform = src.transform
+          return np.stack([np.broadcast_to(((transform.c + self.pixel_locations * transform.a) / 180.0)[None, :], (256, 256)), 
+                           np.broadcast_to(((transform.f + self.pixel_locations * transform.e) / 90.0)[:, None], (256, 256))], axis=-1)
+
      def get_data(self, index, scale, class_feature):
 
           scale_folder = "con_context" if scale == "context" and self.use_consistent_context else scale
@@ -100,12 +107,15 @@ class FloodDataset(torch.utils.data.Dataset):
           data = [tf.imread(f"{self.data_folder}/{scale_folder}/{feature}/{self.patches[index]}") for feature in self.features[scale] if\
                   (((feature in self.class_features) == class_feature) and (feature not in self.derived_features))]
           # derived features
-          if self.derived_exists[scale]:
+          if "indices" in self.features[scale]:
                data = data + [self.calculate_indices(index, scale_folder)]
+          if "coordinates" in self.features[scale]:
+               data = data + [self.calculate_coords(index, scale_folder)]
           return data
      
      def get_label(self, index, scale):
-          return tf.imread(f"{self.data_folder}/{scale}/label/{self.patches[index]}")
+          scale_folder = "con_context" if (scale == "context") and self.use_consistent_context else scale
+          return tf.imread(f"{self.data_folder}/{scale_folder}/label/{self.patches[index]}")
      
      def get_img_label(self, index, feature):
           return tf.imread(f"{self.data_folder}/local/{feature}/{self.patches[index]}")
@@ -266,7 +276,7 @@ class MaskFeatures(object):
      Mask/permute (either shuffle or zero-out) the provided features.
      For the purpose of analysing the model behaviour with XAI.
      """
-     def __init__(self, config, mask_features):
+     def __init__(self, config, mask_features, mask_feature_bands):
 
           self.config = config
           self.scales = self.config["scales"]
@@ -276,6 +286,7 @@ class MaskFeatures(object):
           self.class_features = {scale: [feature for feature in self.config[f"{scale}_features"] if feature in self.class_features] for scale in self.scales}
           self.feature_indices = utils.get_indices_per_feature()
           self.mask_features = mask_features
+          self.mask_feature_bands = mask_feature_bands
 
           self.feature_channels, self.class_feature_channels = {}, {}
           for scale in self.scales:
@@ -294,6 +305,10 @@ class MaskFeatures(object):
                for scale in self.mask_features:
                     for feature_name in self.mask_features[scale]:
 
+                         if self.mask_feature_bands: 
+                              feature_band = feature_name[1]
+                              feature_name = feature_name[0]                                   
+
                          if feature_name in self.feature_channels[scale]:
                               feature_channels = self.feature_channels[scale]
                               key = "features"
@@ -304,10 +319,14 @@ class MaskFeatures(object):
                          channels = feature_channels[feature_name]
 
                          for channel in range(data[f"{scale}_{key}"][channels].shape[0]):
+                              if self.mask_feature_bands:
+                                   channel = feature_band
                               if not self.config["permute"]:
                                    data[f"{scale}_{key}"][channels][channel, :, :] = 0
                               else:
                                    data[f"{scale}_{key}"][channels][channel, :, :] = data[f"{scale}_{key}"][channels][channel, :, :].view(-1)[torch.randperm(256*256)].view(1, 256, 256) 
+                              if self.mask_feature_bands:
+                                   break
 
           return data
           
