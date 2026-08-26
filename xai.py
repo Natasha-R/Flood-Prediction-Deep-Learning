@@ -20,6 +20,7 @@ if __name__ == "__main__":
     parser.add_argument('--mask_context_features', type=str, default=None, help="Mask these context scale features.")
     parser.add_argument('--mask_basin_features', type=str, default=None, help="Mask these basin scale features.")
     parser.add_argument('--permute', action="store_true", default=False, help="Use permute by shuffling instead of zero-out the feature/patch.")
+    parser.add_argument('--mask_feature_bands', action="store_true", default=False, help="Mask each of the feature bands individually.")
 
     parser.add_argument('--metrics', action="store_true", default=False, help="Calculate metrics.")
     parser.add_argument('--visualise', action="store_true", default=False, help="Create a visualisation.")
@@ -78,12 +79,17 @@ if __name__ == "__main__":
         for scale in config["scales"]:
             for feature in config[f"{scale}_features"]:
                 mask_features = {scale: [feature]}
-                config["masked_features"] = utils.mask_to_string(mask_features)
-                loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
-                                                          mask_features=mask_features, mask_patch=mask_patch)
-                calculate_metrics(config, config_name + "_masked", model, loader, args.modelling_folder, epoch=num_epochs, 
-                                device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
-                                classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
+                for band in utils.get_indices_per_feature()[feature]:
+                    if args.mask_feature_bands:
+                        mask_features = {scale: [(feature, band)]}
+                    config["masked_features"] = utils.mask_to_string(mask_features)
+                    loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event,
+                                                            mask_features=mask_features, mask_feature_bands=args.mask_feature_bands, mask_patch=mask_patch)
+                    calculate_metrics(config, config_name + "_masked", model, loader, args.modelling_folder, epoch=num_epochs, 
+                                    device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event,
+                                    classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
+                    if not args.mask_feature_bands:
+                        break
 
     elif args.mask_local_features or args.mask_nearby_features or args.mask_context_features or args.mask_basin_features:
         for scale, scale_mask_features in zip(["local", "nearby", "context", "basin"], [args.mask_local_features, args.mask_nearby_features, args.mask_context_features, args.mask_basin_features]):
