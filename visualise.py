@@ -40,7 +40,8 @@ def denormalise_feature(patch, predict_feature, data_folder):
     return patch
 
 def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
-                          scale, patch, pred_only, border, classification, sensitivity, resolution, mask_features=None, mask_patch=None):
+                          scale, patch, pred_only, border, classification, sensitivity, resolution, class_probabilities=False, 
+                          mask_features=None, mask_patch=None):
 
     loss_function = "cross entropy"
     if config.get("loss_function", "cross entropy").lower()=="dice":
@@ -63,10 +64,10 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
 
     # define the colours for the visualisation
     # 0: no data, 1: aoi, 2: flood, 4: val border, 5: test border, 6: train border
-    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 4:(255, 255, 255), 5:(152, 97, 255), 6: (152, 97, 255)} 
+    label_colours = {0: (255, 0, 0), 1: (0, 0, 0), 2: (27, 197, 214), 4:(255, 255, 255), 5:(0, 0, 0), 6: (152, 97, 255)} 
     # 0 no data, 1: underpredict, 2: overpredict, 3: correct, 4: val border, 5: test border, 6: train border
-    matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(152, 97, 255), 6: (152, 97, 255)} 
-    all_patch_paths = []
+    matching_colours = {0: (0, 0, 0), 1:(255, 251, 0), 2:(202, 61, 23), 3:(35, 220, 71), 4:(255, 255, 255), 5:(0, 0, 0), 6: (152, 97, 255)} 
+    all_patch_paths, all_prob_patch_paths = [], []
 
     model.eval()
     with torch.no_grad():
@@ -105,6 +106,10 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             if loss_function=="dice" or classification:
                 predicted_class[predicted_class == 1] = 2
                 predicted_class[predicted_class == 0] = 1
+            if class_probabilities:
+                predicted_probabilities = torch.softmax(model_output[f"{scale}_pred"], dim=1)
+                predicted_class_probability = predicted_probabilities.gather(1, torch.argmax(predicted_probabilities, dim=1).unsqueeze(1)).squeeze(1)
+                predicted_probabilities = torch.concat([predicted_probabilities.squeeze(), predicted_class_probability]).squeeze()
 
             # evaluate the matching of prediction to label
             if not predict_feature:
@@ -123,13 +128,19 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             # save the predictions for the data patch
             patch_path = f"{path_folder}/{config_name}_{patch_file}"
             with rasterio.open(patch_path, "w", **meta, compress="LZW") as file:
-                
                 file.write(predicted_class.squeeze().to(torch_dtype).cpu().numpy(), 1)
                 file.write(sample[f"{scale}_label"].squeeze().to(torch_dtype).cpu().numpy(), 2)
                 file.write(correctly_matching.to(torch_dtype).cpu().numpy(), 3)
                 file.nodata = 0
-
             all_patch_paths.append(patch_path)
+
+            if class_probabilities:
+                prob_patch_path = f"{path_folder}/{config_name}_prob_{patch_file}"
+                meta.update({"count": 4, "dtype": "float32"})
+                meta.pop("nodata", None)
+                with rasterio.open(prob_patch_path, "w", **meta, compress="LZW") as file:
+                    file.write(predicted_probabilities.cpu().numpy())
+                all_prob_patch_paths.append(prob_patch_path)
 
     # merge all of the predicted patches together
     all_patches = [rasterio.open(path) for path in all_patch_paths]
@@ -139,6 +150,13 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     full_subevent_meta = all_patches[0].meta.copy()
     full_subevent_meta.update({"height": full_subevent.shape[1], "width": full_subevent.shape[2],
                                "transform": full_subevent_transform, "dtype": numpy_dtype, "nodata": 0})
+
+    if class_probabilities:
+        all_prob_patches = [rasterio.open(path) for path in all_prob_patch_paths]
+        full_prob_subevent, full_prob_subevent_transform = merge(all_prob_patches)
+        #for index in [0, 2]: full_subevent[index] = np.where(full_subevent[1] == 0, 0, full_subevent[index])
+        full_prob_subevent_meta = all_prob_patches[0].meta.copy()
+        full_prob_subevent_meta.update({"height": full_prob_subevent.shape[1], "width": full_prob_subevent.shape[2], "transform": full_prob_subevent_transform})
 
     # mark a border around the patches
     if border > 0:
@@ -173,6 +191,14 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                 file.write_colormap(band_num, colour_map)
             file.nodata = 0
 
+        if class_probabilities:
+            with rasterio.open(f"{save_path}_prob.tif", "w", **full_prob_subevent_meta, compress="LZW") as file:
+                file.write(full_prob_subevent)
+                file.set_band_description(1, "no_data_probability")
+                file.set_band_description(2, "no_flood_probability")
+                file.set_band_description(3, "flood_probability")
+                file.set_band_description(4, "predicted_class_probability")
+
     # save the visualisation as a jpeg, with separate files for the predictions, ground truth label, and matching
     elif file_type == "png":
         image_names, indices, colour_maps = ["prediction", "label", "match"], [0, 1, 2], [label_colours, label_colours, matching_colours]
@@ -191,6 +217,12 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     for path in all_patch_paths:
         if os.path.exists(path):
             os.remove(path)
+    if class_probabilities:
+        for file in all_prob_patches:
+            file.close()
+        for path in all_prob_patch_paths:
+            if os.path.exists(path):
+                os.remove(path)
 
     print(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
 
@@ -236,6 +268,7 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not label & comparison")
     parser.add_argument('-b', '--border', default=5, help="Print a border around the patches, with the given pixel size")
 
+    parser.add_argument('--class_probabilities', action="store_true", default=False, help="Also generate a visualisation of the class probabilities.")
     parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
     parser.add_argument('--sensitivity', type=float, default=0.05, help="Specify a sensitivity for the flood proportion.")
     parser.add_argument('--resolution', type=int, default=1, help="Specify the resolution for the classification evaluation.")
@@ -252,4 +285,5 @@ if __name__ == "__main__":
 
     visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
                           device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                          pred_only=args.pred_only, border=int(args.border), classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution)
+                          pred_only=args.pred_only, border=int(args.border), classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution,
+                          class_probabilities=args.class_probabilities)
