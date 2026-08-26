@@ -126,15 +126,21 @@ class CrossScaleAttention(nn.Module):
         self.local_residual = config.get("local_residual_within_attention", True)
         self.resolutions = {"local": 10, "nearby": 25, "context": 100, "basin": 1000}
         largest_resolution = max([self.resolutions[scale] for scale in config["scales"]])
-        
-        q_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
-        q_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
+
+        if config.get("use_positional_encoding", True):
+            q_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
+            q_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[query_scale] / largest_resolution
+            k_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
+            k_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
+        else:
+            q_x_encoding = torch.linspace(-1, 1, size)
+            q_y_encoding = torch.linspace(-1, 1, size)
+            k_x_encoding = torch.linspace(-1, 1, size)
+            k_y_encoding = torch.linspace(-1, 1, size)
+
         q_x_encoding = q_x_encoding.view(1, 1, 1, size).expand(1, 1, size, size)
         q_y_encoding = q_y_encoding.view(1, 1, size, 1).expand(1, 1, size, size)
         self.register_buffer("query_positional_encoding", torch.cat([q_x_encoding, q_y_encoding], dim=1), persistent=True)
-
-        k_x_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
-        k_y_encoding = (((torch.arange(size) + 0.5) / size) * 2.0 - 1.0) * self.resolutions[key_scale] / largest_resolution
         k_x_encoding = k_x_encoding.view(1, 1, 1, size).expand(1, 1, size, size)
         k_y_encoding = k_y_encoding.view(1, 1, size, 1).expand(1, 1, size, size)
         self.register_buffer("key_positional_encoding", torch.cat([k_x_encoding, k_y_encoding], dim=1), persistent=True)
