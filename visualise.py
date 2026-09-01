@@ -40,22 +40,17 @@ def denormalise_feature(patch, predict_feature, data_folder):
     return patch
 
 def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
-                          scale, patch, pred_only, border, classification, sensitivity, resolution, class_probabilities=False, 
-                          mask_features=None, mask_patch=None):
+                          scale, patch, pred_only, border, class_probabilities=False, mask_features=None, mask_before_normalization=False, mask_value=0):
 
     loss_function = "cross entropy"
     if config.get("loss_function", "cross entropy").lower()=="dice":
         loss_function = "dice"
-    if classification:
-        config["classification_evaluation"] = classification
-        config["sensitivity"] = sensitivity
-        config["resolution"] = resolution
     predict_feature = config.get("predict_feature", False)
     torch_dtype = torch.int8 if not predict_feature else torch.float32
     numpy_dtype = "int8" if not predict_feature else "float32"
 
     # load the dataset
-    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_patch=mask_patch)
+    dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_before_normalization=mask_before_normalization, mask_value=mask_value)
     if patch: subevent=patch
 
     path_folder = f"{modelling_folder}/visualise/{config_name}/"
@@ -98,12 +93,12 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                 predicted_class = torch.ones(256, 256).to(device) * predicted_class
                 label = torch.ones(256, 256).to(device) * label
                 sample[f"{scale}_label"] = label
-            if classification:
-                predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
-                predicted_class, label = predicted_class.squeeze(), label.squeeze()
-                label[label == 1] = 2
-                label[label == 0] = 1
-            if loss_function=="dice" or classification:
+            # if classification:
+            #     predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
+            #     predicted_class, label = predicted_class.squeeze(), label.squeeze()
+            #     label[label == 1] = 2
+            #     label[label == 0] = 1
+            if loss_function=="dice":
                 predicted_class[predicted_class == 1] = 2
                 predicted_class[predicted_class == 0] = 1
             if class_probabilities:
@@ -179,8 +174,8 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
 
     # save the visualisation as geotiff, with predicted, ground truth label, and matching bands
     save_path = f"{path_folder}/{config_name}_{num_epochs}epochs_{scale}_{subevent}"
-    if classification:
-        save_path = f"{save_path}_sen{str(sensitivity).replace(".","-")}_res{resolution}"
+    # if classification:
+    #     save_path = f"{save_path}_sen{str(sensitivity).replace(".","-")}_res{resolution}"
 
     if file_type == "geotiff":
         with rasterio.open(f"{save_path}.tif", "w", **full_subevent_meta, compress="LZW") as file:

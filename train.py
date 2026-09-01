@@ -71,6 +71,9 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
                 for item in data.keys():
                     if "metadata" not in item:
                         data[item] = data[item].to(rank) #BCHW (features) #BHW (label)
+                        if config.get("clip_data_inputs", False):
+                            data[item] = torch.nan_to_num(data[item], nan=0.0, posinf=10.0, neginf=-10.0)
+                            data[item] = torch.clamp(data[item], -10, 10)
                 model_output = model(data)#BclassesHW
 
                 loss = 0.0
@@ -81,6 +84,8 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
                     if scale == "local":
                         local_losses += indiv_loss.item()
                 loss.backward()
+                if config.get("clip_gradients", False):
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.get("clip_gradients"))
                 optimizer.step()
                 losses["epoch_train_losses"].append(loss.item())
                 losses["epoch_train_local_losses"].append(local_losses)

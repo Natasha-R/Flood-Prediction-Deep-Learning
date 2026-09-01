@@ -19,11 +19,11 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, mask_patch=None, training=False):
+def create_data_loader(config, data_folder, ddp, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, training=False, mask_before_normalization=False, mask_value=0):
      """
      Create a dataloader for a particular data subset, subevent or event.
      """
-     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_feature_bands, mask_patch, training)
+     dataset = FloodDataset(config, data_folder, subset, subevent, event, patch, mask_features, mask_feature_bands, training, mask_before_normalization, mask_value)
 
      if ddp: 
           loader = torch.utils.data.DataLoader(
@@ -49,7 +49,7 @@ class FloodDataset(torch.utils.data.Dataset):
      """
      The dataset for the flood data.
      """
-     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, mask_patch=None, training=False):
+     def __init__(self, config, data_folder, subset=None, subevent=None, event=None, patch=None, mask_features=None, mask_feature_bands=False, training=False, mask_before_normalization=False, mask_value=0):
           
           self.config = config
           self.data_folder = data_folder
@@ -77,11 +77,11 @@ class FloodDataset(torch.utils.data.Dataset):
           self.patches = list(data_subset["patch"])
           self.subevents = list(data_subset["subevent"])
 
-          self.transform = transforms.Compose([ToTensor(config),
-                                               Normalize(config, data_folder),
-                                               MaskFeatures(config, mask_features, mask_feature_bands),
-                                               MaskPatch(config, mask_patch),
-                                               HorizontalFlip(training, subset)])
+          transform_operations = [ToTensor(config), 
+                                  Normalize(config, data_folder),
+                                  HorizontalFlip(training, subset)]
+          transform_operations.insert(1 if mask_before_normalization else 2, MaskFeatures(config, mask_features, mask_feature_bands, mask_value))
+          self.transform = transforms.Compose(transform_operations)
 
      def __len__(self):
           return len(self.patches)
@@ -276,7 +276,7 @@ class MaskFeatures(object):
      Mask/permute (either shuffle or zero-out) the provided features.
      For the purpose of analysing the model behaviour with XAI.
      """
-     def __init__(self, config, mask_features, mask_feature_bands):
+     def __init__(self, config, mask_features, mask_feature_bands, mask_value):
 
           self.config = config
           self.scales = self.config["scales"]
@@ -287,6 +287,7 @@ class MaskFeatures(object):
           self.feature_indices = utils.get_indices_per_feature()
           self.mask_features = mask_features
           self.mask_feature_bands = mask_feature_bands
+          self.mask_value = mask_value
 
           self.feature_channels, self.class_feature_channels = {}, {}
           for scale in self.scales:
@@ -321,47 +322,14 @@ class MaskFeatures(object):
                          for channel in range(data[f"{scale}_{key}"][channels].shape[0]):
                               if self.mask_feature_bands:
                                    channel = feature_band
-                              if not self.config["permute"]:
-                                   data[f"{scale}_{key}"][channels][channel, :, :] = 0
-                              else:
+                              if self.mask_value == "permute":
                                    data[f"{scale}_{key}"][channels][channel, :, :] = data[f"{scale}_{key}"][channels][channel, :, :].view(-1)[torch.randperm(256*256)].view(1, 256, 256) 
+                              else:
+                                   data[f"{scale}_{key}"][channels][channel, :, :] = float(self.mask_value)
                               if self.mask_feature_bands:
                                    break
 
           return data
-          
-class MaskPatch(object):
-     """
-     Mask/permute (either shuffle or zero-out) the provided patch coordinates.
-     For the purpose of analysing the model behaviour with XAI.
-     """
-     def __init__(self, config, mask_patch):
-
-          self.config = config
-          self.mask_patch = mask_patch
-          
-     def __call__(self, data):
-
-          if self.mask_patch:
-
-               scale = self.mask_patch["scale"]
-               top_left_x, top_left_y = [int(value) for value in self.mask_patch["top_left"]]
-               bottom_right_x, bottom_right_y = [int(value) for value in self.mask_patch["bottom_right"]]
-
-               for key in ["features", "classes"]:
-                    if not self.config["permute"]:
-                         data[f"{scale}_{key}"][:, top_left_y:bottom_right_y, top_left_x:bottom_right_x] = 0
-                    else:
-                         for channel in range(data[f"{scale}_{key}"].shape[0]):
-                              data[f"{scale}_{key}"][channel, top_left_y:bottom_right_y, top_left_x:bottom_right_x] = \
-                              data[f"{scale}_{key}"][channel, top_left_y:bottom_right_y, top_left_x:bottom_right_x] \
-                              .contiguous().view(-1)[torch.randperm((bottom_right_x-top_left_x)*(bottom_right_y-top_left_y))] \
-                              .view(1, bottom_right_y-top_left_y, bottom_right_x-top_left_x) 
-
-               return data
-     
-          else:
-               return data
 
 def normalize(data_folder=os.environ["DATA_FOLDER"]):
      """
