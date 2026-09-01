@@ -54,7 +54,7 @@ def calculate_dataset_correlations(data_folder):
                                                                                    [1, 1, 1, 1, 2, 2, 11, 2, 2, 16, 3, 2, 1, 1]) for band_index in range(feature_count)]
     correlations = {f"{class_type}_correlation": defaultdict(list) for class_type in ["all", "flood", "non_flood"]}
 
-    for index in tqdm(range(208, len(raster_extents))):
+    for index in tqdm(range(len(raster_extents))):
 
         subevent = raster_extents.loc[index, "subevent"]
         feature_data = {"all":{}, "flood":{}, "non_flood":{}}
