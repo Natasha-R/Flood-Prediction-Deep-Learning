@@ -48,6 +48,8 @@ if __name__ == "__main__":
     parser.add_argument('--prediction_scale', default="local", help="The prediction scale that we want to explain.")
     parser.add_argument('--feature_map_scale', default="local", help="The feature map scale that we are generating the explanation from.")
     parser.add_argument('--class_of_interest', default=2, type=int, help="The class that we want to generate an explanation of (1 for non-flood, 2 for flood).")
+    parser.add_argument('--box_top_left', type=str, default=None, help="Define a box on the patch image, in pixels.")
+    parser.add_argument('--box_bottom_right', type=str, default=None, help="Define a box on the patch image, in pixels.")
 
     args = parser.parse_args()
     utils.check_paths(args)
@@ -60,10 +62,9 @@ if __name__ == "__main__":
     model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
 
     if args.grad_cam_method:
-        new_config_name = f"{config_name}_{num_epochs}epochs_{args.grad_cam_method}_PRED{args.prediction_scale}_MAP{args.feature_map_scale}_class{args.class_of_interest}_({args.box_top_left})({args.box_bottom_right})_{args.patch}"
         args.box_top_left = tuple([int(value) for value in args.box_top_left.replace(" ", "").split(",")])
         args.box_bottom_right = tuple([int(value) for value in args.box_bottom_right.replace(" ", "").split(",")])
-        seg_grad_cam(config=config, config_name=new_config_name, data_folder=args.data_folder, modelling_folder=args.modelling_folder, model=model, device=args.gpu, method=args.grad_cam_method,
+        seg_grad_cam(config=config, config_name=config_name, data_folder=args.data_folder, modelling_folder=args.modelling_folder, model=model, device=args.gpu, method=args.grad_cam_method,
                      patch=args.patch, target_map=args.feature_map_scale, target_pred=args.prediction_scale, box_top_left=args.box_top_left, box_bottom_right=args.box_bottom_right, class_of_interest=args.class_of_interest)
 
     if args.mask_all_features_each_scale:

@@ -8,11 +8,7 @@ import os
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
-from rasterio.features import rasterize
-from scipy.ndimage import binary_erosion
-from shapely.geometry import box
-import geopandas as gpd
-from metrics import convert_to_classification
+from rasterio.windows import from_bounds
 import json
 
 def hatch_mask(mask, spacing=8, thickness=1, direction="+"):
@@ -53,7 +49,11 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_before_normalization=mask_before_normalization, mask_value=mask_value)
     if patch: subevent=patch
 
-    path_folder = f"{modelling_folder}/visualise/{config_name}/"
+    if mask_features:
+        base_config = "_".join([element for element in config_name.split("_") if not("[" in element)])
+        path_folder = f"{modelling_folder}/visualise/{base_config}/"
+    else:
+        path_folder = f"{modelling_folder}/visualise/{config_name}/"
     if not os.path.exists(path_folder):
         os.mkdir(path_folder)
 
@@ -156,26 +156,46 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     # mark a border around the patches
     if border > 0:
         patch_subset = list(dataset.data_subset["subset"])
-        for other_subset, value in zip(["val", "test", "train"], [4, 5, 6]):
-            patch_geometries = gpd.GeoDataFrame(geometry=[box(*all_patches[index].bounds) for index in range(len(dataset)) if other_subset in patch_subset[index]])
-            if len(patch_geometries) > 0:
-                # patch_geometries = patch_geometries.buffer(0.0001).union_all().buffer(-0.0001)
-                # patch_geometries = patch_geometries.geoms if patch_geometries.geom_type == "MultiPolygon" else [patch_geometries]
-                for geometry in patch_geometries.geometry:
-                    mask = rasterize([(geometry, 1)], out_shape=(full_subevent.shape[1], full_subevent.shape[2]), transform=full_subevent_transform, fill=0, dtype=numpy_dtype).astype(bool)
-                    if other_subset == "train":
-                        hatch = hatch_mask(mask, spacing=50, thickness=border, direction="+")
-                        hatch |= hatch_mask(mask, spacing=50, thickness=border, direction="-")
-                        for band in range(3):
-                            full_subevent[band][hatch] = value
-                    border_mask = (mask) & (~binary_erosion(mask, iterations=border))
-                    for band in range(3):
-                        full_subevent[band][border_mask] = value
+
+        for index, subset_name in enumerate(patch_subset):
+            if "val" in subset_name:
+                value = 4
+            elif "test" in subset_name:
+                value = 5
+            elif "train" in subset_name:
+                value = 6
+            else:
+                continue
+            window = from_bounds(*all_patches[index].bounds, transform=full_subevent_transform)
+            window = window.round_offsets().round_lengths()
+            row_start = max(0, int(window.row_off))
+            col_start = max(0, int(window.col_off))
+            row_end = min(full_subevent.shape[1], row_start + int(window.height))
+            col_end = min(full_subevent.shape[2], col_start + int(window.width))
+
+            patch_view = full_subevent[:, row_start:row_end, col_start:col_end]
+            height = patch_view.shape[1]
+            width = patch_view.shape[2]
+            if height == 0 or width == 0:
+                continue
+
+            if "train" in subset_name:
+                mask = np.ones((height, width), dtype=bool)
+                hatch = hatch_mask(mask, spacing=50, thickness=border, direction="+")
+                hatch |= hatch_mask(mask, spacing=50, thickness=border, direction="-")
+                for band in range(3):
+                    patch_view[band][hatch] = value
+
+            thickness = min(border, height, width)
+            patch_view[:, :thickness, :] = value
+            patch_view[:, -thickness:, :] = value
+            patch_view[:, :, :thickness] = value
+            patch_view[:, :, -thickness:] = value
 
     # save the visualisation as geotiff, with predicted, ground truth label, and matching bands
     save_path = f"{path_folder}/{config_name}_{num_epochs}epochs_{scale}_{subevent}"
-    # if classification:
-    #     save_path = f"{save_path}_sen{str(sensitivity).replace(".","-")}_res{resolution}"
+    if mask_features:
+         save_path = f"{save_path}_value{mask_value}_beforenorm{mask_before_normalization}"
 
     if file_type == "geotiff":
         with rasterio.open(f"{save_path}.tif", "w", **full_subevent_meta, compress="LZW") as file:
@@ -219,7 +239,7 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
             if os.path.exists(path):
                 os.remove(path)
 
-    print(f"Saved visualisation of '{subevent}' by model '{config_name}'.")
+    print(f"Saved visualisation to {save_path}")
 
 def plot_losses(losses, config, config_name, modelling_folder, rank, logger):
     """
@@ -262,11 +282,7 @@ if __name__ == "__main__":
     parser.add_argument('-f', '--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'png'.")
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not label & comparison")
     parser.add_argument('-b', '--border', default=5, help="Print a border around the patches, with the given pixel size")
-
     parser.add_argument('--class_probabilities', action="store_true", default=False, help="Also generate a visualisation of the class probabilities.")
-    parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
-    parser.add_argument('--sensitivity', type=float, default=0.05, help="Specify a sensitivity for the flood proportion.")
-    parser.add_argument('--resolution', type=int, default=1, help="Specify the resolution for the classification evaluation.")
 
     args = parser.parse_args()
 
@@ -280,5 +296,4 @@ if __name__ == "__main__":
 
     visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
                           device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                          pred_only=args.pred_only, border=int(args.border), classification=args.classification, sensitivity=args.sensitivity, resolution=args.resolution,
-                          class_probabilities=args.class_probabilities)
+                          pred_only=args.pred_only, border=int(args.border), class_probabilities=args.class_probabilities)
