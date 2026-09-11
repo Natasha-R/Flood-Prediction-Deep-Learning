@@ -136,5 +136,5 @@ def seg_grad_cam(config, config_name, data_folder, modelling_folder, model, devi
 
     fig.tight_layout()
     save_file = f"{config_name}_{method}_PRED{target_pred}_{patch}_{box_top_left}{box_bottom_right}_class{class_of_interest}_MAP{target_map}"
-    fig.savefig(f"{modelling_folder}/visualise/{config_name}/{save_file}.png", bbox_inches="tight")
+    fig.savefig(f"{modelling_folder}/visualise/{config_name}/{save_file}.png", dpi=300, bbox_inches="tight")
     print("Saved figure to:", f"{modelling_folder}/visualise/{config_name}/{save_file}.png", flush=True)

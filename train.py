@@ -6,6 +6,7 @@ import os
 import modelling.utils as utils
 import argparse
 import pandas as pd
+import re
 from visualise import plot_losses
 from metrics import calculate_metrics
 import torch.distributed as dist
@@ -23,7 +24,7 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
-def train(rank, world_size, config_path, data_folder, modelling_folder, pretrained_path, compute_losses=False, ddp=False):
+def train(rank, world_size, config_path, data_folder, modelling_folder, pretrained_path, continue_training=False, compute_losses=False, ddp=False):
 
     if ddp:
         setup(rank, world_size)
@@ -34,6 +35,13 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
     try:
         logger = utils.get_logger()
         config, config_name = utils.load_config(config_path, logger)
+        if continue_training:
+            paths = [path for path in os.listdir(f"{modelling_folder}/models/") if re.fullmatch(rf"{re.escape(config_name)}_\d+\.pth", path)]
+            latest_model_epoch = max([int(path.split("_")[-1].split(".")[0]) for path in paths])
+            pretrained_path = f"{modelling_folder}/models/{config_name}_{latest_model_epoch}.pth"
+            epoch_start = latest_model_epoch + 1
+        else:
+            epoch_start = 1
         model = utils.load_model(config, rank, ddp, logger, pretrained_path)
         output_scales = ["local"] if config.get("only_pred_local", True) else config["scales"]
         subsets = list(pd.read_csv(f"{data_folder}/subsets/{config['data_subset_file']}.csv")["subset"].unique())
@@ -57,7 +65,7 @@ def train(rank, world_size, config_path, data_folder, modelling_folder, pretrain
         losses.update({f"epoch_{subset}_local_losses": [] for subset in subsets})
         losses.update({f"total_{subset}_local_losses": [] for subset in subsets})
 
-        for epoch in range(1, config["number_epochs"]+1):
+        for epoch in range(epoch_start, config["number_epochs"]+1):
 
             epoch_start_time = time.time()
             losses.update({f"epoch_{subset}_losses": [] for subset in subsets})
@@ -150,6 +158,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('-g', '--gpu', default="ddp", help="Specify which gpu to train on. 'ddp' for parallel training, '0', '1' for a GPU, and 'cpu' for CPU.")
     parser.add_argument('-p', '--pretrained', default=False, help="A path to pretrained model weights.")
+    parser.add_argument('-o', '--continue_training', action="store_true", default=False, help="Continue training a partially trained model (e.g. that was interrupted).")
     parser.add_argument('-l', '--losses', action="store_true", default=False, help="Computes the losses after every epoch, if turned on.")
 
     args = parser.parse_args()
@@ -160,7 +169,8 @@ if __name__ == "__main__":
     
     world_size = torch.cuda.device_count()
     if args.gpu=="ddp":
-        mp.spawn(train, args=(world_size, args.config_path, args.data_folder, args.modelling_folder, args.pretrained, args.losses, True), nprocs=world_size, join=True)
+        mp.spawn(train, args=(world_size, args.config_path, args.data_folder, args.modelling_folder, args.pretrained, args.continue_training, args.losses, True), 
+                 nprocs=world_size, join=True)
     else:
-        train(rank=args.gpu, world_size=world_size, config_path=args.config_path, data_folder=args.data_folder, 
-              modelling_folder=args.modelling_folder, pretrained_path=args.pretrained, compute_losses=args.losses, ddp=False)
+        train(rank=args.gpu, world_size=world_size, config_path=args.config_path, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
+              pretrained_path=args.pretrained, continue_training=args.continue_training, compute_losses=args.losses, ddp=False)
