@@ -1,22 +1,39 @@
-architecture: "BranchedUNet"
+architecture: "BranchedUNet" # BranchedUNet or BasicUNet
+kernel_size: 5 # Size of the kernels for the up and down convolutions
+use_attention: True # Use attention to fuse the scales, or a simple convolution
+depth: 3 # Depth of the UNet (number of down and up convolutions)
+only_pred_local: True # If true, use only a single decoder to predict just the local patch, else multi-scale decoders
+residuals_all_scales: True # If true, concatenate residuals from all of the scale encoders, not just the local scale encoder
+crop_scales_residuals: True # Crop the wider scales residuals to the spatial bounds of the corresponding local feature map
+crop_scales_at_bottleneck: False # Crop the wider scales feature map at the bottleneck, to the spatial bounds of the corresponding local feature map
+local_residual_within_attention: False # Add the local residuals within the cross-scale attention module
+scale_only_bottleneck: True # If true, only pass the output from the attention module across the bottleneck, and not the local feature map
+hierarchical_attention: True # If true, use a hierarchical processing of cross-scale attention. If false, the local feature map simply attends to the wider scales
 
-features: ["dem", "sentinel1", "sentinel2", "soil_bulk_density", "soil_moisture_one_day", "precipitation", "flow_accumulation", "flow_direction", "soil_class", "land_cover", "permanent_water"]
+# Define the features to be input into the model at each scale (can be different for each scale)
+local_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_week", "soil_class", "land_cover"]
+nearby_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_week", "soil_class", "land_cover"]
+context_features: ["sentinel2", "dem", "precipitation", "permanent_water", "soil_bulk_density", "soil_moisture_one_week", "soil_class", "land_cover"]
+# The input feature values can be weighted higher or lower for each scale
+local_feat_weight: 1
+context_feat_weight: 1
+nearby_feat_weight: 1
+# If multi-scale decoders are used (only_pred_local==False) the prediction for each scale can be weighted within the loss function
+local_loss_weight: 1
+context_loss_weight: 1
+nearby_loss_weight: 1
 
-scales: ["local", "context", "basin"]
-local_weight: 1
-context_weight: 0.25
-basin_weight: 0.25
+class_weights: [0, 0.550, 1.450] # Class weights for non-data, AOI (non-flood) and flood
+use_scheduler: False # If True, the OneCycleLR scheduler is used 
+loss_function: "cross entropy" # Either the cross entropy or dice loss function can be used
+number_epochs: 100 # Number of epochs to train for
+learning_rate: 0.0001 # Learning rate for the optimiser
+dropout: 0.1 # The drop-out rate, which is the probability of an element to be dropped-out
+weight_decay: 0.0001 # The weight decay for the optimiser
+batch_size: 32 # Data loader batch size
+number_workers: 8 # Data loader number of workers
 
-class_weights: [0, 0.775, 1.225]
-use_scheduler: False
-loss_function: "cross entropy"
-number_epochs: 50
-learning_rate: 0.0001
-dropout: 0.1
-weight_decay: 0.0001
-batch_size: 32
-number_workers: 8
+save_model_on_epoch: 10 # Save the model weights every n epochs
+compute_metrics_on_epoch: 10 # Compute metrics for the validation and test sets every n epochs
 
-save_model_on_epoch: 5
-
-data_subset_file: "testing_data_subset"
+data_subset_file: "only_patches_data_subset" # The name of the data subset file
