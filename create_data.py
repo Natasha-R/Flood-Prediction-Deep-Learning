@@ -24,11 +24,13 @@ from datetime import datetime
 # Download the global soil classes and global soil bulk density data from https://soilgrids.org/ and place the files in the global_data folder
 # Download the global ESA worldcover files from https://zenodo.org/records/7254221 and place in global_ESA_worldcover
 # Download global basins from https://www.hydrosheds.org/products/hydrobasins and place in global_basins
-# Download the global 3s and 30s flow accumulation layers from https://www.hydrosheds.org/hydrosheds-core-downloads and place in global_flow_accumulation
 
 def main(data_folder, global_folder):
 
     print(str(datetime.now()), "Beginning data creation and processing!", flush=True)
+
+    wider_scales = ["nearby", "con_context"]
+    wider_scales_with_local = ["local", "nearby", "con_context"]
 
     ######################## LABELS
 
@@ -58,16 +60,16 @@ def main(data_folder, global_folder):
     create_label_local_patches(data_folder)
     print(str(datetime.now()), "All local label patches created!", flush=True)
 
-    # Create label patches for the context and basin scales
-    print(str(datetime.now()), "Creating 'basin' and 'context' scale patches of the labels...", flush=True)
+    # Create label patches for the wider scales
+    print(str(datetime.now()), "Creating the wider scales patches of the labels...", flush=True)
     find_wider_scale_bounds(data_folder, global_folder)
-    for scale in ["context", "basin"]:
+    for scale in wider_scales:
         create_label_scales(data_folder, scale)
-    print(str(datetime.now()), "Basin and context scale label patches created!", flush=True)
+    print(str(datetime.now()), "Wider scale label patches created!", flush=True)
 
-    print(str(datetime.now()), "Creating context and basin permanent water rasters...", flush=True)
-    create_permanent_water_rasters(data_folder, global_folder, ["context", "basin"])
-    print(str(datetime.now()), "Context and basin permanent water rasters created!", flush=True)
+    print(str(datetime.now()), "Creating the wider scales permanent water rasters...", flush=True)
+    create_permanent_water_rasters(data_folder, global_folder, wider_scales)
+    print(str(datetime.now()), "Wider scales permanent water rasters created!", flush=True)
     
     ######################## FEATURES
 
@@ -75,14 +77,14 @@ def main(data_folder, global_folder):
     print(str(datetime.now()), "Creating DEM rasters...", flush=True)
     extract_dem_aoi(data_folder, global_folder)
     create_dem_rasters(data_folder)
-    for scale in ["context", "basin"]:
+    for scale in wider_scales:
         create_dem_scales(data_folder, global_folder, scale)
     print(str(datetime.now()), "DEM rasters created!", flush=True)
 
     # Create the soil moisture and soil type rasters
     print(str(datetime.now()), "Creating soil moisture and soil type rasters...", flush=True)
     download_soil_moisture_data(data_folder, global_folder)
-    for scale in ["local", "context", "basin"]:
+    for scale in wider_scales_with_local:
         create_soil_moisture_rasters(data_folder, global_folder, scale=scale)
         create_soil_type(data_folder, global_folder, scale=scale)
     print(str(datetime.now()), "Soil moisture and soil type rasters created!", flush=True)
@@ -90,43 +92,25 @@ def main(data_folder, global_folder):
     # Create the precipitation rasters
     print(str(datetime.now()), "Creating precipitation rasters...", flush=True)
     download_precipitation(data_folder, global_folder)
-    for scale in ["local", "context", "basin"]:
+    for scale in wider_scales_with_local:
         create_precipitation_rasters(data_folder, global_folder, scale)
     print(str(datetime.now()), "Precipitation rasters created!", flush=True)
 
     # Create the land cover rasters
     print(str(datetime.now()), "Creating land cover rasters...", flush=True)
-    for scale in ["local", "context", "basin"]:
+    for scale in wider_scales_with_local:
         create_land_cover_rasters(data_folder, global_folder, scale)
     print(str(datetime.now()), "Land cover rasters created!", flush=True)
 
-    # Create the flow accumulation and flow direction rasters
-    print(str(datetime.now()), "Creating flow accumulation and direction rasters...", flush=True)
-    for scale in ["local", "context", "basin"]:
-       create_flow_accumulation(data_folder, global_folder, scale)
-       create_flow_direction(data_folder, global_folder, scale)
-    print(str(datetime.now()), "Flow accumulation and direction rasters created!", flush=True)
-
     # Create the Sentinel 2 rasters
     print(str(datetime.now()), "Creating Sentinel 2 rasters...", flush=True)
-    for scale in ["local", "context", "basin"]:
+    for scale in wider_scales_with_local:
         find_sentinel2_availability(data_folder, scale)
         find_minimal_cloud_cover(data_folder, scale)
         download_sentinel2(data_folder, scale)
         set_sentinel2_nodata(data_folder, scale)
         create_sentinel2_rasters(data_folder, scale)
     print(str(datetime.now()), "Sentinel 2 rasters created!", flush=True)
-
-    # Create the Sentinel 1 rasters
-    print(str(datetime.now()), "Creating Sentinel 1 rasters...", flush=True)
-    for scale in ["local", "context", "basin"]:
-        find_sentinel1_availability(data_folder, scale)
-        download_sentinel1(data_folder, scale) 
-        create_sentinel1_aoi_date_difference(data_folder, scale) 
-    create_sentinel1_rasters(data_folder)
-    for scale in ["context", "basin"]:
-        create_sentinel1_scale_rasters(data_folder, scale)
-    print(str(datetime.now()), "Sentinel 1 rasters created!", flush=True)
 
     # Create local 256x256 patches of the features
     print(str(datetime.now()), "Creating local patches of the features...", flush=True)
@@ -144,7 +128,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not os.path.isdir(f"{args.data_folder}/raw_cems"):
-        raise FileNotFoundError("CEMS labels must be put in the raw_cems folder in", args.data_folder)
+        raise FileNotFoundError(f"CEMS labels must be put in the raw_cems folder, in {args.data_folder}/raw_cems")
     if len(os.listdir(f"{args.data_folder}/raw_cems"))==0:
         raise FileNotFoundError("The raw_cems folder is empty!")
 

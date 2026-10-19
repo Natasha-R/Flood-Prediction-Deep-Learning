@@ -81,7 +81,7 @@ def create_soil_moisture_rasters(data_folder, global_folder, scale):
     for index in tqdm(range(len(raster_extents)), desc=f"Create soil moisture rasters for {scale} scale"):
 
         # extract data for both one day previous to the subevent, and one week before
-        for time_frame in ["one_day", "one_week"]:
+        for time_frame in ["one_week"]:
             
             # extract out the metadata for the subevent raster
             date = raster_extents[time_frame].dt.date[index]
