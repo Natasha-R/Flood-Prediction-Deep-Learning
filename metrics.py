@@ -8,27 +8,20 @@ import torch
 import pandas as pd
 import os
 from collections import defaultdict
-from modelling.utils import convert_to_classification
+from modelling.arla_torch import arla
 
 def calculate_metrics(config, config_name, model, loader, modelling_folder, epoch, device, subset=None, subevent=None, event=None, patch=None,
-                      classification=False, sensitivity=None, resolution=None):
+                      sensitivity=None, subpatches=None):
 
     model.eval()
     with torch.no_grad():
 
-        binary_prediction = False
-        loss_function = "cross entropy"
-        if config.get("loss_function", "cross entropy").lower()=="dice":
-            binary_prediction = True
-            loss_function = "dice"
-        if classification:
-            binary_prediction = True
-        config["sensitivity"] = sensitivity
-        config["resolution"] = resolution
-        config["classification_evaluation"] = classification
-        output_scales = ["local"] if config["only_pred_local"] else config["scales"]
         predict_feature = config.get("predict_feature", False)
-
+        binary_prediction = config.get("loss_function", "cross entropy").lower()=="dice"
+        config["sensitivity"] = sensitivity
+        config["subpatches"] = subpatches
+        output_scales = ["local"] if config["only_pred_local"] else config["scales"]
+        
         # define the metrics functions for both the binary and multi-class cases
         if binary_prediction:
             f1 = BinaryF1Score().to(device)
@@ -36,6 +29,8 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             recall = BinaryRecall().to(device)
             accuracy = BinaryAccuracy().to(device)
             csi = CriticalSuccessIndex(threshold=0.5).to(device)
+            metrics_functions = [f1, precision, recall, accuracy]
+            metrics_names = ["f1", "precision", "recall", "accuracy"]
 
         elif not predict_feature:
             f1 = MulticlassF1Score(num_classes=config["num_classes"], average=None).to(device)
@@ -43,7 +38,6 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
             recall = MulticlassRecall(num_classes=config["num_classes"], average=None).to(device)
             accuracy = MulticlassAccuracy(num_classes=config["num_classes"], average=None).to(device)
             csi = CriticalSuccessIndex(threshold=0.5).to(device)
-
             metrics_functions = [f1, precision, recall, accuracy]
             metrics_names = ["f1", "precision", "recall", "accuracy"]
 
@@ -63,15 +57,16 @@ def calculate_metrics(config, config_name, model, loader, modelling_folder, epoc
                     data[item] = data[item].to(device)
             model_output = model(data)
             for scale in output_scales:
-                if loss_function == "dice":
+                if binary_prediction:
                     model_output[f"{scale}_pred"] = (torch.sigmoid(model_output[f"{scale}_pred"].squeeze()) > 0.5)*1
                 elif predict_feature:
                     model_output[f"{scale}_pred"] = model_output[f"{scale}_pred"].flatten()
                     data[f"{scale}_label"] = data[f"{scale}_label"].flatten()
-                else:
+                else: # cross entropy loss
                     model_output[f"{scale}_pred"] = torch.argmax(model_output[f"{scale}_pred"], dim=1)
-                if classification:
-                    model_output[f"{scale}_pred"], data[f"{scale}_label"] = convert_to_classification(config=config, pred=model_output[f"{scale}_pred"], label=data[f"{scale}_label"])
+                if sensitivity: # apply ARLA
+                    model_output[f"{scale}_pred"] = arla(model_output[f"{scale}_pred"], sensitivity, subpatches, positive_class=2, negative_class=1, invalid_class=0)
+                    data[f"{scale}_label"] = arla(data[f"{scale}_label"], sensitivity, subpatches, positive_class=2, negative_class=1, invalid_class=0)
                 predictions[scale].append(model_output[f"{scale}_pred"])
                 labels[scale].append(data[f"{scale}_label"])
 
@@ -114,9 +109,8 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--modelling_folder', default=os.environ["MODELLING_FOLDER"], help="The path to the modelling folder.")
     parser.add_argument('-g', '--gpu', default="0", help="Specify which gpu to use. '0', '1', etc.")
 
-    parser.add_argument('--classification', action="store_true", default=False, help="Evaluate using a classification approach.")
-    parser.add_argument('--sensitivity', type=str, default="0.05", help="Specify a sensitivity (threshold) for the flood proportion.")
-    parser.add_argument('--resolution', type=str, default="1", help="Specify the resolution for the classification evaluation.")
+    parser.add_argument('--sensitivity', type=str, default="", help="Specify a sensitivity (threshold) for the flood proportion for ARLA. Specify multiple as: '0.01, 0.1'.")
+    parser.add_argument('--subpatches', type=str, default="", help="Specify the number of subpatches (resolution) for ARLA. Specify multiple as: '1, 4, 8'.")
 
     parser.add_argument('-s', '--subset', default=None, help="Specify a data subset to calculate metrics on.")
     parser.add_argument('-b', '--subevent', default=None, help="Specify a subevent to calculate metrics on.")
@@ -135,11 +129,8 @@ if __name__ == "__main__":
     model = utils.load_model(config, rank=args.gpu, ddp=False, pretrained_path=f"{args.modelling_folder}/models/{config_name}_{num_epochs}.pth")
     loader = data_pipeline.create_data_loader(config=config, data_folder=args.data_folder, ddp=False, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch)
     
-    args.sensitivity = [float(value) for value in args.sensitivity.replace(" ", "").split(",")]
-    args.resolution = [int(value) for value in args.resolution.replace(" ", "").split(",")]
-
-    for sensitivity in args.sensitivity:
-        for resolution in args.resolution:
+    for sensitivity in [float(value) if value else None for value in args.sensitivity.replace(" ", "").split(",")]:
+        for subpatch in [int(value) if value else None for value in args.subpatches.replace(" ", "").split(",")]:
             calculate_metrics(config, config_name, model, loader, args.modelling_folder, epoch=num_epochs, 
-                            device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch,
-                            classification=args.classification, sensitivity=sensitivity, resolution=resolution)
+                              device=args.gpu, subset=args.subset, subevent=args.subevent, event=args.event, patch=args.patch,
+                              sensitivity=sensitivity, subpatches=subpatch)

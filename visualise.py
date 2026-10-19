@@ -10,6 +10,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from rasterio.windows import from_bounds
 import json
+from modelling.arla_torch import arla
 
 def hatch_mask(mask, spacing=8, thickness=1, direction="+"):
     yy, xx = np.indices(mask.shape)
@@ -36,14 +37,12 @@ def denormalise_feature(patch, predict_feature, data_folder):
     return patch
 
 def visualise_predictions(config, config_name, model, num_epochs, data_folder, modelling_folder, device, subevent, file_type, 
-                          scale, patch, pred_only, border, class_probabilities=False, mask_features=None, mask_before_normalization=False, mask_value=0):
+                          scale, patch, pred_only, border, class_probabilities=False, mask_features=None, mask_before_normalization=False, mask_value=0,
+                          sensitivity=None, subpatches=None):
 
-    loss_function = "cross entropy"
-    if config.get("loss_function", "cross entropy").lower()=="dice":
-        loss_function = "dice"
+    loss_function = config.get("loss_function", "cross entropy")
     predict_feature = config.get("predict_feature", False)
-    torch_dtype = torch.int8 if not predict_feature else torch.float32
-    numpy_dtype = "int8" if not predict_feature else "float32"
+    torch_dtype, numpy_dtype = (torch.int8, "int8") if not predict_feature else (torch.float32, "float32")
 
     # load the dataset
     dataset = data_pipeline.FloodDataset(config, data_folder, subevent=subevent, patch=patch, mask_features=mask_features, mask_before_normalization=mask_before_normalization, mask_value=mask_value)
@@ -93,11 +92,9 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
                 predicted_class = torch.ones(256, 256).to(device) * predicted_class
                 label = torch.ones(256, 256).to(device) * label
                 sample[f"{scale}_label"] = label
-            # if classification:
-            #     predicted_class, label = convert_to_classification(predicted_class.unsqueeze(0), label.unsqueeze(0), config)
-            #     predicted_class, label = predicted_class.squeeze(), label.squeeze()
-            #     label[label == 1] = 2
-            #     label[label == 0] = 1
+            if sensitivity:
+                predicted_class = arla(predicted_class, sensitivity, subpatches, positive_class=2, negative_class=1, invalid_class=0)
+                label = arla(label, sensitivity, subpatches, positive_class=2, negative_class=1, invalid_class=0)
             if loss_function=="dice":
                 predicted_class[predicted_class == 1] = 2
                 predicted_class[predicted_class == 0] = 1
@@ -196,6 +193,8 @@ def visualise_predictions(config, config_name, model, num_epochs, data_folder, m
     save_path = f"{path_folder}/{config_name}_{num_epochs}epochs_{scale}_{subevent}"
     if mask_features:
          save_path = f"{save_path}_value{mask_value}_beforenorm{mask_before_normalization}"
+    if sensitivity:
+        save_path = f"{save_path}_sensitivity{sensitivity}_subpatches{subpatches}"
 
     if file_type == "geotiff":
         with rasterio.open(f"{save_path}.tif", "w", **full_subevent_meta, compress="LZW") as file:
@@ -282,7 +281,10 @@ if __name__ == "__main__":
     parser.add_argument('-f', '--file_type', default="geotiff", help="Save the image file as either a 'geotiff' or 'png'.")
     parser.add_argument('-o', '--pred_only', action="store_true", default=False, help="Save only the prediction, and not label & comparison")
     parser.add_argument('-b', '--border', default=5, help="Print a border around the patches, with the given pixel size")
+
     parser.add_argument('--class_probabilities', action="store_true", default=False, help="Also generate a visualisation of the class probabilities.")
+    parser.add_argument('--sensitivity', type=float, default=None, help="Specify a sensitivity (threshold) for the flood proportion for ARLA.")
+    parser.add_argument('--subpatches', type=int, default=None, help="Specify the number of subpatches (resolution) for ARLA.")
 
     args = parser.parse_args()
 
@@ -296,4 +298,5 @@ if __name__ == "__main__":
 
     visualise_predictions(config=config, config_name=config_name, model=model, num_epochs=num_epochs, data_folder=args.data_folder, modelling_folder=args.modelling_folder, 
                           device=args.gpu, subevent=args.subevent, file_type=args.file_type, scale=args.scale, patch=args.patch, 
-                          pred_only=args.pred_only, border=int(args.border), class_probabilities=args.class_probabilities)
+                          pred_only=args.pred_only, border=int(args.border), class_probabilities=args.class_probabilities,
+                          sensitivity=args.sensitivity, subpatches=args.subpatches)

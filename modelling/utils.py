@@ -145,35 +145,3 @@ def get_derived_features():
 
 def get_non_transformed_features():
     return ["permanent_water", "soil_class", "land_cover", "indices", "coordinates"]
-
-def convert_to_classification(pred, label, config):
-
-    # sensitivity: the proportion threshold to classify a patch as flooded, e.g. 0.1 means IF >= 10% pixels flooded THEN patch is "flooded"
-    # resolution: how many times to divide the patch. 1 means classify whole patch. 2 means split into 4 smaller patches. 256 means exact segmentation.
-
-    uses_dice = config.get("loss_function", "cross entropy").lower()=="dice"
-    flood_class = 1 if uses_dice else 2
-    invalid_class = 0 if not uses_dice else 5
-    splits = np.array_split(np.arange(256), config["resolution"])
-    
-    for index in range(label.shape[0]):
-        for data_name in [label, pred]:
-            for row_index in splits:
-                for col_index in splits:
-
-                    start_col, end_col = row_index[0], row_index[-1] + 1
-                    start_row, end_row = col_index[0], col_index[-1] + 1
-                    subpatch = data_name[index, :, :][start_col:end_col, start_row:end_row]
-
-                    valid_pixels = (subpatch != invalid_class).sum().float()
-                    if valid_pixels > 0:
-                        proportion_flooded = (subpatch == flood_class).sum().float() / valid_pixels
-                    else:
-                        proportion_flooded = torch.tensor(0.0, device=subpatch.device)
-
-                    if proportion_flooded > config["sensitivity"]:
-                        data_name[index, :, :][start_col:end_col, start_row:end_row] = 1
-                    else:
-                        data_name[index, :, :][start_col:end_col, start_row:end_row] = 0
-    
-    return pred, label
