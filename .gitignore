@@ -2,6 +2,8 @@
 temp_code/
 *.out
 modelling.sh
+modelling_0.sh
+modelling_1.sh
 evaluating.sh
 .vscode/
 
